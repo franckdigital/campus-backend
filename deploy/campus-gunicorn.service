@@ -1,0 +1,21 @@
+[Unit]
+Description=Campus Gunicorn daemon (HTTP)
+After=network.target mysql.service redis.service
+Requires=mysql.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/campus-backend
+Environment="PATH=/var/www/campus-backend/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=config.settings"
+ExecStart=/var/www/campus-backend/venv/bin/gunicorn \
+    --config /var/www/campus-backend/deploy/gunicorn.conf.py \
+    config.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s TERM $MAINPID
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

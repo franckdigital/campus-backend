@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv\\\\Scripts\\\\python.exe manage.py check)",
+      "PowerShell(Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri \"http://127.0.0.1:8002/api/v1/auth/login/\" -Method POST -ContentType \"application/json\" -Body '{}' -ErrorAction Stop; \"Status: $\\($r.StatusCode\\)\" } catch { \"Response: $\\($_.Exception.Response.StatusCode.value__\\) - $\\($_.Exception.Message\\)\" })",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://127.0.0.1:8002/api/docs/\" -Method GET -ErrorAction Stop; \"Server still running: $\\($r.StatusCode\\)\" } catch { \"Server not responding: $\\($_.Exception.Message\\)\" })",
+      "PowerShell(cd \"c:\\\\Users\\\\HP\\\\Desktop\\\\projets\\\\campus-backend\"; Start-Process -FilePath \".\\\\venv\\\\Scripts\\\\python.exe\" -ArgumentList \"manage.py runserver 8002\" -WorkingDirectory \"c:\\\\Users\\\\HP\\\\Desktop\\\\projets\\\\campus-backend\" -WindowStyle Normal; Start-Sleep -Seconds 4; try { Invoke-RestMethod -Uri \"http://127.0.0.1:8002/api/docs/\" -Method GET -ErrorAction Stop; \"OK\" } catch { \"Status: $\\($_.Exception.Response.StatusCode.value__\\)\" })",
+      "Bash(powershell -Command \"Get-Content Finance.jsx | Select-String -Pattern 'backdropFilter.*blur' | Select-Object -First 5\")",
+      "Bash(npx tsc *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\HP\\\\Desktop\\\\projets\\\\campus-react\\\\src\" -Recurse -Include \"*.jsx\",\"*.tsx\",\"*.js\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(findstr -i \"print\\\\|sharing\\\\|file-system\\\\|pdf\")",
+      "Bash(python manage.py shell -c ' *)",
+      "Bash(findstr /i \"datetimepicker\\\\|react-native-community\\\\|expo-date\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\HP\\Desktop\\projets\\campus-react\\src",
+      "c:\\Users\\HP\\.claude\\projects\\c--Users-HP-Desktop-projets-campus-backend\\memory"
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+[Unit]
+Description=Campus Daphne daemon (WebSocket)
+After=network.target mysql.service redis.service
+Requires=redis.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/campus-backend
+Environment="PATH=/var/www/campus-backend/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=config.settings"
+ExecStart=/var/www/campus-backend/venv/bin/daphne \
+    -b 127.0.0.1 \
+    -p 8002 \
+    --access-log /var/log/campus/daphne_access.log \
+    config.asgi:application
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,265 @@
+from django.db import models
+from django.conf import settings
+from django.utils import timezone
+from apps.core.models import BaseModel, Site
+import uuid
+
+
+class NotificationTemplate(BaseModel):
+    """Reusable templates for automated notifications."""
+    EVENT_TYPES = [
+        ('PAYMENT_VALIDATED',  'Paiement validé'),
+        ('ABSENCE_RECORDED',   'Absence constatée'),
+        ('ABSENCE_PLANNED',    'Absence prévue'),
+        ('CASH_DEPOSIT',       'Versement caisse'),
+        ('MOBILE_MONEY',       'Mobile money'),
+        ('GRADE_PUBLISHED',    'Note publiée'),
+        ('BULLETIN_PUBLISHED', 'Bulletin publié'),
+        ('CUSTOM',             'Personnalisé'),
+    ]
+    CHANNEL_CHOICES = [
+        ('EMAIL',     'Email'),
+        ('SMS',       'SMS'),
+        ('WHATSAPP',  'WhatsApp'),
+        ('PUSH',      'Push'),
+        ('IN_APP',    'In-App'),
+    ]
+
+    name       = models.CharField(max_length=200)
+    event_type = models.CharField(max_length=50, choices=EVENT_TYPES)
+    channel    = models.CharField(max_length=20, choices=CHANNEL_CHOICES)
+    subject    = models.CharField(max_length=255, blank=True, help_text='Sujet email ou titre push')
+    body       = models.TextField(help_text='Variables: {{student_name}}, {{amount}}, {{date}}, {{subject_name}}')
+    site       = models.ForeignKey(Site, on_delete=models.CASCADE, related_name='notif_templates', null=True, blank=True)
+
+    class Meta:
+        db_table = 'notification_templates'
+        ordering = ['event_type', 'channel']
+        unique_together = ['event_type', 'channel', 'site']
+
+    def __str__(self):
+        return f"{self.name} [{self.channel}]"
+
+    def render(self, context: dict) -> tuple[str, str]:
+        """Returns (subject, body) with context vars replaced."""
+        subject = self.subject
+        body    = self.body
+        for k, v in context.items():
+            subject = subject.replace(f'{{{{{k}}}}}', str(v))
+            body    = body.replace(f'{{{{{k}}}}}', str(v))
+        return subject, body
+
+
+class Notification(BaseModel):
+    """In-app notification record."""
+    TYPE_CHOICES = [
+        ('PAYMENT',    'Paiement'),
+        ('ATTENDANCE', 'Présence'),
+        ('ABSENCE',    'Absence'),
+        ('ASSIGNMENT', 'Devoir'),
+        ('GRADE',      'Note'),
+        ('MESSAGE',    'Message'),
+        ('SYSTEM',     'Système'),
+        ('REMINDER',   'Rappel'),
+        ('ALERT',      'Alerte'),
+        ('FINANCE',    'Finance'),
+    ]
+    PRIORITY_CHOICES = [
+        ('LOW',    'Basse'),
+        ('NORMAL', 'Normale'),
+        ('HIGH',   'Haute'),
+        ('URGENT', 'Urgente'),
+    ]
+
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notifications'
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='sent_notifications'
+    )
+    notification_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    priority          = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='NORMAL')
+    title             = models.CharField(max_length=255)
+    message           = models.TextField()
+    data              = models.JSONField(default=dict, blank=True)
+    action_url        = models.CharField(max_length=500, blank=True)
+    is_read           = models.BooleanField(default=False)
+    read_at           = models.DateTimeField(null=True, blank=True)
+    site              = models.ForeignKey(
+        Site, on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications'
+    )
+
+    class Meta:
+        db_table = 'notifications'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient', 'is_read']),
+            models.Index(fields=['notification_type', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.notification_type} – {self.title}"
+
+    def mark_as_read(self):
+        if not self.is_read:
+            self.is_read = True
+            self.read_at = timezone.now()
+            self.save(update_fields=['is_read', 'read_at'])
+
+    @classmethod
+    def send(cls, recipient, notification_type, title, message,
+             sender=None, priority='NORMAL', data=None, action_url='', site=None):
+        notification = cls.objects.create(
+            recipient=recipient, sender=sender,
+            notification_type=notification_type, priority=priority,
+            title=title, message=message,
+            data=data or {}, action_url=action_url, site=site
+        )
+        NotificationLog.objects.create(notification=notification, channel='IN_APP', status='SENT')
+        return notification
+
+    @classmethod
+    def send_bulk(cls, recipients, notification_type, title, message,
+                  sender=None, priority='NORMAL', data=None, action_url='', site=None):
+        return [
+            cls.send(
+                recipient=r, notification_type=notification_type,
+                title=title, message=message,
+                sender=sender, priority=priority,
+                data=data, action_url=action_url, site=site
+            )
+            for r in recipients
+        ]
+
+
+class NotificationLog(BaseModel):
+    """Delivery attempt log — one row per channel per notification."""
+    CHANNEL_CHOICES = [
+        ('IN_APP',    'In-App'),
+        ('EMAIL',     'Email'),
+        ('SMS',       'SMS'),
+        ('PUSH',      'Push'),
+        ('WHATSAPP',  'WhatsApp'),
+        ('WEBSOCKET', 'WebSocket'),
+    ]
+    STATUS_CHOICES = [
+        ('PENDING',   'En attente'),
+        ('SENT',      'Envoyé'),
+        ('DELIVERED', 'Délivré'),
+        ('FAILED',    'Échoué'),
+        ('RETRYING',  'Relance'),
+    ]
+
+    notification   = models.ForeignKey(Notification, on_delete=models.CASCADE, related_name='logs')
+    channel        = models.CharField(max_length=20, choices=CHANNEL_CHOICES)
+    status         = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    recipient_address = models.CharField(max_length=255, blank=True,
+                                         help_text='email / phone / device token')
+    sent_at        = models.DateTimeField(null=True, blank=True)
+    delivered_at   = models.DateTimeField(null=True, blank=True)
+    error_message  = models.TextField(blank=True)
+    metadata       = models.JSONField(default=dict, blank=True)
+    retry_count    = models.PositiveSmallIntegerField(default=0)
+    max_retries    = models.PositiveSmallIntegerField(default=3)
+    next_retry_at  = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'notification_logs'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'next_retry_at']),
+            models.Index(fields=['channel', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.notification.title} [{self.channel}] → {self.status}"
+
+    def mark_sent(self, address=''):
+        self.status = 'SENT'
+        self.sent_at = timezone.now()
+        if address:
+            self.recipient_address = address
+        self.save(update_fields=['status', 'sent_at', 'recipient_address'])
+
+    def mark_failed(self, error=''):
+        self.status = 'FAILED'
+        self.error_message = error
+        if self.retry_count < self.max_retries:
+            self.status = 'RETRYING'
+            import datetime
+            delay_minutes = 5 * (2 ** self.retry_count)   # 5, 10, 20 min
+            self.next_retry_at = timezone.now() + datetime.timedelta(minutes=delay_minutes)
+            self.retry_count += 1
+        self.save(update_fields=['status', 'error_message', 'retry_count', 'next_retry_at'])
+
+
+class DeviceToken(BaseModel):
+    """Push notification device tokens (Expo / FCM / APNS)."""
+    PLATFORM_CHOICES = [
+        ('EXPO', 'Expo'),
+        ('FCM',  'Firebase Android'),
+        ('APNS', 'Apple iOS'),
+    ]
+
+    user     = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='device_tokens'
+    )
+    token    = models.CharField(max_length=512)
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, default='EXPO')
+    is_active = models.BooleanField(default=True)
+    last_used = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table       = 'device_tokens'
+        unique_together = ['user', 'token']
+        verbose_name   = 'Token appareil'
+        verbose_name_plural = 'Tokens appareils'
+
+    def __str__(self):
+        return f"{self.user} [{self.platform}] {self.token[:30]}…"
+
+
+class NotificationPreference(BaseModel):
+    """Per-user channel preferences."""
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notification_preferences'
+    )
+    email_enabled    = models.BooleanField(default=True)
+    sms_enabled      = models.BooleanField(default=False)
+    push_enabled     = models.BooleanField(default=True)
+    whatsapp_enabled = models.BooleanField(default=False)
+
+    phone_number     = models.CharField(max_length=20, blank=True)
+    whatsapp_number  = models.CharField(max_length=20, blank=True)
+
+    payment_notifications    = models.BooleanField(default=True)
+    attendance_notifications = models.BooleanField(default=True)
+    assignment_notifications = models.BooleanField(default=True)
+    grade_notifications      = models.BooleanField(default=True)
+    message_notifications    = models.BooleanField(default=True)
+    system_notifications     = models.BooleanField(default=True)
+
+    quiet_hours_enabled = models.BooleanField(default=False)
+    quiet_hours_start   = models.TimeField(null=True, blank=True)
+    quiet_hours_end     = models.TimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'notification_preferences'
+
+    def __str__(self):
+        return f"Préférences – {self.user.full_name}"
+
+    def active_channels(self):
+        channels = ['IN_APP']
+        if self.email_enabled and hasattr(self.user, 'email') and self.user.email:
+            channels.append('EMAIL')
+        if self.sms_enabled and self.phone_number:
+            channels.append('SMS')
+        if self.push_enabled:
+            channels.append('PUSH')
+        if self.whatsapp_enabled and self.whatsapp_number:
+            channels.append('WHATSAPP')
+        return channels
