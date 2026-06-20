@@ -399,11 +399,14 @@ class Command(BaseCommand):
 
     def _create_site(self, info):
         from apps.core.models import Site
-        site = Site.objects.create(
-            code=info['code'], name=info['name'],
-            address=info['address'], city=info['city'],
-            country='CI', phone=info['phone'], email=info['email'],
-            is_main=info['is_main'],
+        site, _ = Site.objects.get_or_create(
+            code=info['code'],
+            defaults=dict(
+                name=info['name'],
+                address=info['address'], city=info['city'],
+                country='CI', phone=info['phone'], email=info['email'],
+                is_main=info['is_main'],
+            ),
         )
         print(f'  Site: {site.name}')
         return site
