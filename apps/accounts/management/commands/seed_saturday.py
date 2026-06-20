@@ -112,12 +112,30 @@ class Command(BaseCommand):
             f'({subject.name}) {verb}'
         ))
 
-        # ── Vérifier l'inscription de k.kouadio ─────────────────
+        # ── Inscription de k.kouadio dans la classe ITA Marcory ─
         from apps.academic.models import Enrollment
-        kevin_enrolled = Enrollment.objects.filter(
-            student__user__email='k.kouadio@ita-marc.ci',
-            class_obj=cls,
-        ).exists()
+        try:
+            kevin_user = User.objects.get(email='k.kouadio@ita-marc.ci')
+            kevin = kevin_user.student_profile
+            ay = cls.academic_year
+            # unique_together = (student, academic_year) → update_or_create
+            enroll, enroll_created = Enrollment.objects.update_or_create(
+                student=kevin,
+                academic_year=ay,
+                defaults={'class_obj': cls, 'status': 'ENROLLED'},
+            )
+            if enroll_created:
+                self.stdout.write(self.style.SUCCESS('Inscription de k.kouadio créée ✓'))
+            elif enroll.class_obj_id == cls.pk:
+                self.stdout.write(self.style.SUCCESS('Inscription de k.kouadio déjà correcte ✓'))
+            else:
+                self.stdout.write(self.style.SUCCESS(
+                    f'Inscription de k.kouadio transférée → {cls.code} ✓'
+                ))
+            kevin_enrolled = True
+        except Exception as exc:
+            self.stderr.write(self.style.WARNING(f'k.kouadio introuvable : {exc}'))
+            kevin_enrolled = False
 
         self.stdout.write('')
         self.stdout.write('─' * 58)
@@ -129,5 +147,5 @@ class Command(BaseCommand):
         self.stdout.write(f'  Enseignant  : {TEACHER_EMAIL}  /  Campus2024!')
         self.stdout.write(f'  Étudiant    : k.kouadio@ita-marc.ci  /  Campus2024!')
         self.stdout.write(f'  Parent      : p.kouadio@gmail.com    /  Campus2024!')
-        self.stdout.write(f'  Kevin inscrit dans la classe : {"oui" if kevin_enrolled else "NON — relancer seed_full"}')
+        self.stdout.write(f'  Kevin inscrit dans la classe : {"✓ oui" if kevin_enrolled else "✗ NON"}')
         self.stdout.write('─' * 58)
