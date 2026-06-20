@@ -265,6 +265,10 @@ class SessionSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     teacher_name = serializers.CharField(source='teacher.user.full_name', read_only=True)
     room_name = serializers.CharField(source='room.name', read_only=True)
+    semester_name = serializers.CharField(source='semester.label', read_only=True)
+    academic_year_id = serializers.UUIDField(source='class_obj.academic_year_id', read_only=True)
+    academic_year_name = serializers.CharField(source='class_obj.academic_year.name', read_only=True)
+    site_id = serializers.UUIDField(source='class_obj.site_id', read_only=True)
     day_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -272,7 +276,8 @@ class SessionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'class_obj', 'class_name', 'subject', 'subject_name',
             'teacher', 'teacher_name', 'room', 'room_name',
-            'day_of_week', 'day_name', 'start_time', 'end_time',
+            'semester', 'semester_name', 'academic_year_id', 'academic_year_name',
+            'site_id', 'day_of_week', 'day_name', 'start_time', 'end_time',
             'is_recurring', 'specific_date', 'is_active', 'created_at'
         ]
         read_only_fields = ['id', 'created_at']

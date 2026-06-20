@@ -402,6 +402,13 @@ class Session(BaseModel):
         blank=True,
         related_name='sessions'
     )
+    semester = models.ForeignKey(
+        'Semester',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sessions',
+    )
     day_of_week = models.IntegerField(choices=DAY_CHOICES)
     start_time = models.TimeField()
     end_time = models.TimeField()

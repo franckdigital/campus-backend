@@ -418,26 +418,37 @@ class RoomViewSet(viewsets.ModelViewSet):
 
 
 class SessionViewSet(viewsets.ModelViewSet):
-    queryset = Session.objects.select_related('class_obj', 'subject', 'teacher', 'room').all()
+    queryset = Session.objects.select_related(
+        'class_obj__academic_year', 'class_obj__site', 'subject', 'teacher__user', 'room', 'semester'
+    ).all()
     serializer_class = SessionSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['day_of_week', 'start_time']
-    filterset_fields = ['class_obj', 'subject', 'teacher', 'room', 'day_of_week', 'is_active']
+    filterset_fields = ['subject', 'room', 'day_of_week', 'is_active', 'semester']
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        p = self.request.query_params
 
-        site_id = self.request.query_params.get('site_id')
+        site_id = p.get('site_id') or p.get('site')
         if site_id:
             queryset = queryset.filter(class_obj__site_id=site_id)
 
-        teacher_id = self.request.query_params.get('teacher_id')
+        class_id = p.get('class_id')
+        if class_id:
+            queryset = queryset.filter(class_obj_id=class_id)
+
+        teacher_id = p.get('teacher_id')
         if teacher_id:
             queryset = queryset.filter(teacher_id=teacher_id)
 
-        class_id = self.request.query_params.get('class_id')
-        if class_id:
-            queryset = queryset.filter(class_obj_id=class_id)
+        semester_id = p.get('semester_id')
+        if semester_id:
+            queryset = queryset.filter(semester_id=semester_id)
+
+        academic_year_id = p.get('academic_year_id')
+        if academic_year_id:
+            queryset = queryset.filter(class_obj__academic_year_id=academic_year_id)
 
         return queryset
 
