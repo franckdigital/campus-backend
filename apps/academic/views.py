@@ -73,7 +73,8 @@ class TeacherViewSet(viewsets.ModelViewSet):
         p = self.request.query_params
         site_id = p.get('site_id') or p.get('site')
         if site_id:
-            queryset = queryset.filter(sites__id=site_id).distinct()
+            # TeacherProfile.sites is not a direct M2M — uses TeacherSite through model
+            queryset = queryset.filter(teacher_sites__site_id=site_id).distinct()
         return queryset
 
     def get_serializer_class(self):
