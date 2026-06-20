@@ -33,8 +33,10 @@ class SiteViewSet(viewsets.ModelViewSet):
         return SiteSerializer
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
+        if instance.is_main:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError("Le site principal ne peut pas être supprimé.")
+        instance.delete()
 
 
 class AcademicYearViewSet(viewsets.ModelViewSet):
