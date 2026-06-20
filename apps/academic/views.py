@@ -68,6 +68,14 @@ class TeacherViewSet(viewsets.ModelViewSet):
     ordering_fields = ['user__last_name', 'hire_date']
     filterset_fields = ['contract_type', 'is_active']
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        p = self.request.query_params
+        site_id = p.get('site_id') or p.get('site')
+        if site_id:
+            queryset = queryset.filter(sites__id=site_id).distinct()
+        return queryset
+
     def get_serializer_class(self):
         if self.action == 'list':
             return TeacherListSerializer
