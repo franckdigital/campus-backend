@@ -107,19 +107,29 @@ class Command(BaseCommand):
             return
 
         # ── Inscrire Kevin dans la classe de Marc-Antoine ────────
+        # unique_together = (student, academic_year) → update_or_create sur cette clé
         ay = cls.academic_year
-        enroll, created_e = Enrollment.objects.get_or_create(
-            student=kevin,
-            class_obj=cls,
-            defaults={
-                'academic_year': ay,
-                'status': 'ENROLLED',
-            }
-        )
-        verb_e = 'créée' if created_e else 'déjà existante'
-        self.stdout.write(self.style.SUCCESS(
-            f'Inscription de k.kouadio dans {cls.code} ({ay.name}) {verb_e}'
-        ))
+        existing = Enrollment.objects.filter(student=kevin, academic_year=ay).first()
+        if existing:
+            if str(existing.class_obj_id) == str(cls.pk):
+                self.stdout.write(self.style.SUCCESS(
+                    f'Inscription de k.kouadio dans {cls.code} ({ay.name}) déjà existante'
+                ))
+            else:
+                prev = existing.class_obj.code
+                existing.class_obj = cls
+                existing.status = 'ENROLLED'
+                existing.save(update_fields=['class_obj', 'status'])
+                self.stdout.write(self.style.SUCCESS(
+                    f'Inscription de k.kouadio transférée : {prev} → {cls.code} ({ay.name})'
+                ))
+        else:
+            Enrollment.objects.create(
+                student=kevin, class_obj=cls, academic_year=ay, status='ENROLLED'
+            )
+            self.stdout.write(self.style.SUCCESS(
+                f'Inscription de k.kouadio dans {cls.code} ({ay.name}) créée'
+            ))
 
         self.stdout.write('')
         self.stdout.write('─' * 55)
