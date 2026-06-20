@@ -716,7 +716,14 @@ class Command(BaseCommand):
                 average=str(avg), rank=i + 1, total_students=n,
                 status=st,
                 subject_averages={
-                    s.code: {'avg': avg, 'coef': s.coefficient}
+                    str(s.id): {
+                        'subject_id': s.id,
+                        'subject_name': s.name,
+                        'subject_code': s.code,
+                        'coefficient': float(s.coefficient),
+                        'grades': [],
+                        'average': round(avg, 2),
+                    }
                     for s in s_list
                 },
                 teacher_comment='Bon travail. Continuez sur cette lancee.',
