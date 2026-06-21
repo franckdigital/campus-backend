@@ -1,7 +1,6 @@
 """
-seed_full.py — Seed multi-campus complet
-5 campus : ITA Marcory, Institut des Technologies d'Abidjan,
-           ITA 2 Plateaux, PIGIER, ISPA
+seed_full.py — Seed groupe ITA complet
+4 campus : ITA Marcory, ITA Plateau, ITA 2 Plateaux, ITA Yopougon, ITA Bouake
 Usage: python manage.py seed_full
 ATTENTION : efface toutes les données existantes avant de seeder.
 """
@@ -28,7 +27,7 @@ SITES_DATA = [
         'phone': '+225 27 21 35 10 00', 'email': 'marcory@ita.ci', 'is_main': True,
     },
     {
-        'code': 'ITA-PLAT', 'name': "Institut des Technologies d'Abidjan",
+        'code': 'ITA-PLAT', 'name': 'ITA Plateau',
         'address': 'Avenue Joseph Anoma, Plateau', 'city': 'Abidjan',
         'phone': '+225 27 20 31 22 00', 'email': 'plateau@ita.ci', 'is_main': False,
     },
@@ -38,25 +37,25 @@ SITES_DATA = [
         'phone': '+225 27 22 48 05 00', 'email': 'deuxplateaux@ita.ci', 'is_main': False,
     },
     {
-        'code': 'PIGIER', 'name': 'PIGIER',
-        'address': 'Boulevard Lagunaire, Cocody', 'city': 'Abidjan',
-        'phone': '+225 27 22 44 20 00', 'email': 'contact@pigier.ci', 'is_main': False,
+        'code': 'ITA-YOPO', 'name': 'ITA Yopougon',
+        'address': 'Boulevard du Banco, Yopougon Niangon', 'city': 'Abidjan',
+        'phone': '+225 27 23 40 15 00', 'email': 'yopougon@ita.ci', 'is_main': False,
     },
     {
-        'code': 'ISPA', 'name': 'ISPA',
-        'address': 'Avenue de la Paix, Yopougon Niangon Nord', 'city': 'Abidjan',
-        'phone': '+225 27 23 50 11 00', 'email': 'contact@ispa.ci', 'is_main': False,
+        'code': 'ITA-BOUA', 'name': 'ITA Bouaké',
+        'address': 'Rue du Commerce, Centre-ville', 'city': 'Bouaké',
+        'phone': '+225 31 63 25 10 00', 'email': 'bouake@ita.ci', 'is_main': False,
     },
 ]
 
 # (nom, code, type, durée_ans)
 # Chaque site ITA a son propre type pour des curricula distincts
 PROGRAMS_DATA = {
-    'ITA-MARC': ('Licence Informatique',          'LI-MARC',   'info_marc', 3),
-    'ITA-PLAT': ('Licence Informatique',          'LI-PLAT',   'info_plat', 3),
-    'ITA-2PL':  ('Licence Informatique',          'LI-2PL',    'info_2pl',  3),
-    'PIGIER':   ('BTS Comptabilite',              'BTS-PIG',   'gestion',   2),
-    'ISPA':     ('BTS Informatique de Gestion',   'BTS-ISPA',  'mixed',     2),
+    'ITA-MARC': ('Licence Informatique',  'LI-MARC',  'info_marc',  3),
+    'ITA-PLAT': ('Licence Informatique',  'LI-PLAT',  'info_plat',  3),
+    'ITA-2PL':  ('Licence Informatique',  'LI-2PL',   'info_2pl',   3),
+    'ITA-YOPO': ('Licence Informatique',  'LI-YOPO',  'info_yopo',  3),
+    'ITA-BOUA': ('Licence Informatique',  'LI-BOUA',  'info_boua',  3),
 }
 
 SUBJECTS = [
@@ -96,22 +95,22 @@ SUBJECTS = [
 SUBJECTS_BY_TYPE = {
     # ITA Marcory — Informatique fondamentale
     'info_marc': ['ALG101', 'PRG101', 'MAT101', 'RES101', 'BDD101', 'ANG101', 'COM101'],
-    # ITA Plateaux — Informatique orientee web et reseaux
+    # ITA Plateau — Web et reseaux
     'info_plat': ['WEB201', 'WEB301', 'RES101', 'RES201', 'BDD101', 'SEC101', 'ANG101'],
-    # ITA 2 Plateaux — Informatique systemes et avancee
+    # ITA 2 Plateaux — Systemes et avancee
     'info_2pl':  ['SYS201', 'SYS301', 'PRG201', 'MAT201', 'BDD201', 'PRJ101', 'ANG101'],
-    # PIGIER — Gestion et comptabilite
-    'gestion':   ['GES101', 'CPT101', 'MKT101', 'DRT101', 'ECO101', 'ANG101', 'COM101'],
-    # ISPA — Informatique de gestion
-    'mixed':     ['INF101', 'GES101', 'CPT101', 'MAT101', 'ANG101', 'COM101', 'ECO101'],
+    # ITA Yopougon — Programmation et bases de donnees
+    'info_yopo': ['ALG101', 'PRG101', 'PRG201', 'MAT101', 'BDD101', 'WEB201', 'ANG101'],
+    # ITA Bouake — Securite et systemes
+    'info_boua': ['ALG101', 'PRG301', 'MAT201', 'SYS201', 'BDD201', 'SEC101', 'ANG101'],
 }
 
 ADMINS_DATA = {
     'ITA-MARC': ('directeur@ita-marc.ci',  'Koffi Emmanuel',  'Yao'),
     'ITA-PLAT': ('directeur@ita-plat.ci',  'Adjoua Patricia', "N'Guessan"),
     'ITA-2PL':  ('directeur@ita-2pl.ci',   'Bernard',         'Atta'),
-    'PIGIER':   ('directeur@pigier.ci',    'Aimee Rosette',   'Gbagbo'),
-    'ISPA':     ('directeur@ispa.ci',      'Lamine Oumar',    'Diallo'),
+    'ITA-YOPO': ('directeur@ita-yopo.ci',  'Bamba',           'Diomande'),
+    'ITA-BOUA': ('directeur@ita-boua.ci',  'Kouassi',         'Yao'),
 }
 
 STAFF_DATA = {
@@ -127,13 +126,13 @@ STAFF_DATA = {
         ('a.gnagne@ita-2pl.ci', 'Adjoua', 'Gnagne'),
         ('k.lago@ita-2pl.ci',   'Kofi',   'Lago'),
     ],
-    'PIGIER': [
-        ('n.ble@pigier.ci',  'Nadege',   'Ble'),
-        ('a.tape@pigier.ci', 'Aristide', 'Tape'),
+    'ITA-YOPO': [
+        ('f.coulibaly@ita-yopo.ci', 'Fatou',  'Coulibaly'),
+        ('m.kone@ita-yopo.ci',      'Moussa', 'Kone'),
     ],
-    'ISPA': [
-        ('m.guehi@ispa.ci', 'Martine', 'Guehi'),
-        ('o.soro@ispa.ci',  'Omar',    'Soro'),
+    'ITA-BOUA': [
+        ('a.traore@ita-boua.ci',  'Aminata',  'Traore'),
+        ('b.kouyate@ita-boua.ci', 'Boubacar', 'Kouyate'),
     ],
 }
 
@@ -155,15 +154,15 @@ TEACHERS_DATA = {
         ('m.toure@ita-2pl.ci',     'Mariam',    'Toure',     'Mathematiques',                'Licence Math-Info',          date(2022, 9,  1), 'CONTRACT',   9000, '2PL-P002'),
         ('p.ouedraogo@ita-2pl.ci', 'Pascal',    'Ouedraogo', 'Reseaux Informatiques',        'Licence Pro Reseaux',        date(2023, 1,  1), 'CONTRACT',   8000, '2PL-P003'),
     ],
-    'PIGIER': [
-        ('j.akre@pigier.ci',      'Jocelyne', 'Akre',      'Commerce International',        'Master Commerce',            date(2020, 9,  1), 'PERMANENT', 14000, 'PIG-P001'),
-        ('r.bogui@pigier.ci',     'Rodrigue', 'Bogui',     'Gestion Financiere & Comptable','Expert-Comptable',           date(2021, 1,  1), 'PERMANENT', 16000, 'PIG-P002'),
-        ('s.coulibaly@pigier.ci', 'Seydou',   'Coulibaly', 'Marketing & Communication',     'Master Marketing',           date(2022, 9,  1), 'CONTRACT',   9000, 'PIG-P003'),
+    'ITA-YOPO': [
+        ('k.bamba@ita-yopo.ci',    'Karim',    'Bamba',    'Algorithmique & Programmation', 'Doctorat Informatique',      date(2022, 9,  1), 'PERMANENT', 14000, 'YOPO-P001'),
+        ('r.coulibaly@ita-yopo.ci','Rodrigue', 'Coulibaly','Bases de donnees & Web',        'Master Informatique',        date(2023, 1,  1), 'PERMANENT', 12000, 'YOPO-P002'),
+        ('n.diallo@ita-yopo.ci',   'Nathalie', 'Diallo',   'Reseaux & Systemes',           'Ingenieur Informatique',     date(2023, 9,  1), 'CONTRACT',  10000, 'YOPO-P003'),
     ],
-    'ISPA': [
-        ('b.assi@ispa.ci',     'Brigitte', 'Assi',     'Informatique de Gestion',          'Ingenieur Informatique',     date(2021, 9,  1), 'PERMANENT', 12000, 'ISPA-P001'),
-        ('m.traore@ispa.ci',   'Moussa',   'Traore',   'Gestion & Administration',         'Master Administration',      date(2021, 9,  1), 'PERMANENT', 11000, 'ISPA-P002'),
-        ('c.lokossou@ispa.ci', 'Carine',   'Lokossou', 'Communication & Langues',          'Master Lettres Modernes',    date(2022, 9,  1), 'CONTRACT',   8000, 'ISPA-P003'),
+    'ITA-BOUA': [
+        ('s.ouattara@ita-boua.ci', 'Seydou',   'Ouattara', 'Securite & Reseaux',            'Master Informatique',        date(2021, 9,  1), 'PERMANENT', 13000, 'BOUA-P001'),
+        ('d.yao@ita-boua.ci',      'Delphine', 'Yao',      'Mathematiques & Systemes',      'Licence Pro Informatique',   date(2022, 9,  1), 'PERMANENT', 11000, 'BOUA-P002'),
+        ('m.toure@ita-boua.ci',    'Mamadou',  'Toure',    'Programmation & Algorithmique', 'Ingenieur Logiciel',         date(2023, 1,  1), 'CONTRACT',   9000, 'BOUA-P003'),
     ],
 }
 
@@ -190,21 +189,19 @@ STUDENTS_DATA = {
         ('d.yeboua@ita-2pl.ci',   'David',    'Yeboua',   'M', date(2003,10,  8), 'Abengourou',  'DEUX-2024-003'),
         ('c.akpan@ita-2pl.ci',    'Celine',   'Akpan',    'F', date(2002,12,  1), 'Abidjan',     'DEUX-2024-004'),
     ],
-    'PIGIER': [  # 7 étudiants
-        ('f.diarrassouba@pigier.ci', 'Fanta',    'Diarrassouba', 'F', date(2003, 4, 17), 'Abidjan',   'PIG-2024-001'),
-        ('n.guede@pigier.ci',        'Noel',     'Guede',        'M', date(2002, 9, 30), 'San-Pedro', 'PIG-2024-002'),
-        ('a.konan@pigier.ci',        'Aminata',  'Konan',        'F', date(2003, 7,  5), 'Abidjan',   'PIG-2024-003'),
-        ('b.kouame@pigier.ci',       'Boris',    'Kouame',       'M', date(2002, 3, 22), 'Bouafle',   'PIG-2024-004'),
-        ('c.ble@pigier.ci',          'Christel', 'Ble',          'F', date(2003, 1, 19), 'Abidjan',   'PIG-2024-005'),
-        ('h.meite@pigier.ci',        'Hamza',    'Meite',        'M', date(2002,10, 11), 'Ferkesse',  'PIG-2024-006'),
-        ('j.daho@pigier.ci',         'Josiane',  'Daho',         'F', date(2003, 5,  3), 'Abidjan',   'PIG-2024-007'),
+    'ITA-YOPO': [  # 5 étudiants
+        ('a.konan@ita-yopo.ci',    'Amani',    'Konan',    'M', date(2003, 5, 12), 'Yopougon',  'YOPO-2024-001'),
+        ('b.toure@ita-yopo.ci',    'Brigitte', 'Toure',    'F', date(2002,11,  3), 'Bouake',    'YOPO-2024-002'),
+        ('c.diomande@ita-yopo.ci', 'Cheick',   'Diomande', 'M', date(2003, 8, 20), 'Daloa',     'YOPO-2024-003'),
+        ('d.koffi@ita-yopo.ci',    'Danielle', 'Koffi',    'F', date(2002, 4, 15), 'Abidjan',   'YOPO-2024-004'),
+        ('e.berte@ita-yopo.ci',    'Evariste', 'Berte',    'M', date(2003, 1,  7), 'Man',       'YOPO-2024-005'),
     ],
-    'ISPA': [  # 5 étudiants
-        ('r.silue@ispa.ci',   'Rachid',   'Silue',    'M', date(2003, 8, 11), 'Ferkessedougou', 'ISPA-2024-001'),
-        ('o.kouakou@ispa.ci', 'Olivia',   'Kouakou',  'F', date(2002, 5, 28), 'Abidjan',        'ISPA-2024-002'),
-        ('t.koffi@ispa.ci',   'Thierry',  'Koffi',    'M', date(2003,11, 15), 'Daloa',          'ISPA-2024-003'),
-        ('n.adepe@ispa.ci',   'Nathalie', 'Adepe',    'F', date(2002, 2,  7), 'Abidjan',        'ISPA-2024-004'),
-        ('s.coulibaly@ispa.ci','Seydou',  'Coulibaly','M', date(2003, 4, 22), 'Korhogo',        'ISPA-2024-005'),
+    'ITA-BOUA': [  # 5 étudiants
+        ('f.ouattara@ita-boua.ci', 'Fatima',   'Ouattara', 'F', date(2003, 6, 25), 'Bouake',    'BOUA-2024-001'),
+        ('g.kone@ita-boua.ci',     'Gontran',  'Kone',     'M', date(2002, 9,  8), 'Katiola',   'BOUA-2024-002'),
+        ('h.traore@ita-boua.ci',   'Hermine',  'Traore',   'F', date(2003, 3, 17), 'Bouake',    'BOUA-2024-003'),
+        ('i.bamba@ita-boua.ci',    'Ibrahim',  'Bamba',    'M', date(2002,12,  2), 'Ferke',     'BOUA-2024-004'),
+        ('j.sanogo@ita-boua.ci',   'Juliette', 'Sanogo',   'F', date(2003, 7, 30), 'Bouake',    'BOUA-2024-005'),
     ],
 }
 
@@ -231,21 +228,19 @@ PARENTS_DATA = {
         ('p.yeboua@gmail.com',   'Augustin',   'Yeboua',   'Technicien',  'CIE',               'FATHER'),
         ('p.akpan@gmail.com',    'Marcelline', 'Akpan',    'Infirmiere',  'Polyclinique',      'MOTHER'),
     ],
-    'PIGIER': [
-        ('p.diarrassouba@gmail.com', 'Lassina',   'Diarrassouba', 'Transporteur', 'Auto-entrepreneur', 'FATHER'),
-        ('p.guede@gmail.com',        'Bernadette','Guede',        'Commercante',  'Marche Cocody',     'MOTHER'),
-        ('p.konan@gmail.com',        'Yao',       'Konan',        'Policier',     'DGPN',              'FATHER'),
-        ('p.kouame@gmail.com',        'Philomene', 'Kouame',       'Menagere',     '',                  'MOTHER'),
-        ('p.ble@gmail.com',           'Auguste',   'Ble',          'Comptable',    'Cabinet Audit CI',  'FATHER'),
-        ('p.meite@gmail.com',         'Fatouma',   'Meite',        'Coiffeuse',    'Auto-entrepreneur', 'MOTHER'),
-        ('p.daho@gmail.com',          'Celestin',  'Daho',         'Gendarme',     'FACI',              'FATHER'),
+    'ITA-YOPO': [
+        ('p.konan.a@gmail.com',    'Adama',     'Konan',    'Technicien',   'CIE',               'FATHER'),
+        ('p.toure.b@gmail.com',    'Awa',       'Toure',    'Commercante',  'Marche Yopougon',   'MOTHER'),
+        ('p.diomande@gmail.com',   'Issa',      'Diomande', 'Enseignant',   'Lycee Classique',   'FATHER'),
+        ('p.koffi.d@gmail.com',    'Edwige',    'Koffi',    'Infirmiere',   'CHU Yopougon',      'MOTHER'),
+        ('p.berte@gmail.com',      'Celestin',  'Berte',    'Fonctionnaire','Min. Agriculture',  'FATHER'),
     ],
-    'ISPA': [
-        ('p.silue@gmail.com',      'Hamidou',   'Silue',     'Commercant',  'Marche Korhogo',    'FATHER'),
-        ('p.kouakou@gmail.com',    'Julienne',  'Kouakou',   'Coiffeuse',   'Auto-entrepreneur', 'MOTHER'),
-        ('p.koffi@gmail.com',      'Lambert',   'Koffi',     'Menuisier',   'Atelier Koffi',     'FATHER'),
-        ('p.adepe@gmail.com',      'Veronique', 'Adepe',     'Couturiere',  'Auto-entrepreneur', 'MOTHER'),
-        ('p.coulibaly@gmail.com',  'Oumar',     'Coulibaly', 'Fonctionnaire','Min. Commerce',    'FATHER'),
+    'ITA-BOUA': [
+        ('p.ouattara.f@gmail.com', 'Lacina',    'Ouattara', 'Commercant',   'Marche Bouake',     'FATHER'),
+        ('p.kone.g@gmail.com',     'Salimata',  'Kone',     'Menagere',     '',                  'MOTHER'),
+        ('p.traore.h@gmail.com',   'Drissa',    'Traore',   'Agriculteur',  'Auto-entrepreneur', 'FATHER'),
+        ('p.bamba@gmail.com',      'Ramata',    'Bamba',    'Couturiere',   'Auto-entrepreneur', 'MOTHER'),
+        ('p.sanogo@gmail.com',     'Aboubacar', 'Sanogo',   'Gendarme',     'FACI',              'FATHER'),
     ],
 }
 
@@ -253,8 +248,8 @@ BANK_DATA = {
     'ITA-MARC': ('Compte Principal ITA Marcory',     'BICICI',   'CI93BI0080MARC01134500014944', 9500000),
     'ITA-PLAT': ('Compte Principal ITA Plateau',     'Ecobank',  'CI93EK0080PLAT01134500014944', 12000000),
     'ITA-2PL':  ('Compte Principal ITA 2 Plateaux',  'SGBCI',    'CI93SG0080TWPL01134500014944', 7500000),
-    'PIGIER':   ('Compte Principal PIGIER',          'BNI',      'CI93BN0080PIGI01134500014944', 15000000),
-    'ISPA':     ('Compte Principal ISPA',            'NSIA Bank','CI93NS0080ISPA01134500014944', 6000000),
+    'ITA-YOPO': ('Compte Principal ITA Yopougon',    'Ecobank',  'CI93EK0080YOPO01134500014944', 8500000),
+    'ITA-BOUA': ('Compte Principal ITA Bouake',      'SGBCI',    'CI93SG0080BOUA01134500014944', 7000000),
 }
 
 
@@ -263,7 +258,7 @@ BANK_DATA = {
 # ===========================================================================
 
 class Command(BaseCommand):
-    help = 'Wipe the database and seed all 5 campuses with complete demo data'
+    help = 'Wipe the database and seed all 5 ITA campuses with complete demo data'
 
     def handle(self, *args, **options):
         print('\n=== NETTOYAGE ===')
@@ -439,7 +434,7 @@ class Command(BaseCommand):
                 name=info['name'],
                 address=info['address'], city=info['city'],
                 country='CI', phone=info['phone'], email=info['email'],
-                is_main=info['is_main'],
+                is_main=info['is_main'], is_active=True,
             ),
         )
         print(f'  Site: {site.name}')
