@@ -579,7 +579,7 @@ class Command(BaseCommand):
         classes = []
         for lvl in levels[:2]:
             cls = ClassModel.objects.create(
-                name=f'{lvl.name} — {site.name[:12]}',
+                name=f'{lvl.name} — {site.code}',
                 code=f'{pfx}-{lvl.code}-A',
                 level=lvl, academic_year=ay, site=site,
                 max_students=40, main_teacher=teachers[0],
