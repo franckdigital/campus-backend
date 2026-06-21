@@ -704,6 +704,32 @@ class Command(BaseCommand):
             )
             Payment.objects.filter(pk=p2.pk).update(payment_date=_dt(date(2025, 2, 1)))
 
+            # ── Paiements PENDING (ITA-PLAT uniquement, étudiants 0 et 1) ──
+            # Sert à tester les notifications push parents :
+            #   1. Le parent se connecte sur mobile (enregistre son token Expo)
+            #   2. L'admin valide ce paiement PENDING → signal → push envoyée
+            if code == 'ITA-PLAT' and i in (0, 1):
+                reliquat = 150000 if i == 0 else 50000
+                inv_notif = Invoice.objects.create(
+                    student=student, site=site, academic_year=ay,
+                    invoice_number=f'FAC-{pfx}-TEST-{i+1:03d}',
+                    due_date=date(2025, 6, 30),
+                    amount_paid=0, created_by=receiver,
+                )
+                InvoiceItem.objects.create(
+                    invoice=inv_notif, fee_type=fee_types['SCOLARITE-S2'],
+                    description='Reliquat scolarite S2 — test notification push',
+                    quantity=1, unit_price=reliquat, total=reliquat,
+                )
+                Invoice.objects.filter(pk=inv_notif.pk).update(issue_date=date(2025, 5, 15))
+                Payment.objects.create(
+                    payment_number=f'PAY-{pfx}-TEST-{i+1:04d}',
+                    invoice=inv_notif, payment_method=pay_methods['MOBILE'],
+                    amount=reliquat, status='PENDING',
+                    reference=f'REF-{pfx}-TEST-{i+1:03d}',
+                    received_by=receiver,
+                )
+
         print(f'  Finance: {len(students)*2} factures, {len(students)*2} paiements')
 
     def _create_grades(self, students, cls, s_map, teacher, s1, cc, exam):
