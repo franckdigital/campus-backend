@@ -754,7 +754,7 @@ class Command(BaseCommand):
                 status=st,
                 subject_averages={
                     str(s.id): {
-                        'subject_id': s.id,
+                        'subject_id': str(s.id),
                         'subject_name': s.name,
                         'subject_code': s.code,
                         'coefficient': float(s.coefficient),
