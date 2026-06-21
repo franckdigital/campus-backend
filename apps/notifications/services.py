@@ -271,6 +271,7 @@ def notify_absence_recorded(attendance_record):
     student = attendance_record.student
     session = attendance_record.attendance_session.session
     date_str = str(attendance_record.attendance_session.date)
+    subject_name = session.subject.name if session and session.subject else 'cours'
 
     for parent_user in _get_student_parents(student):
         n = Notification.send(
@@ -280,12 +281,13 @@ def notify_absence_recorded(attendance_record):
             title='Absence signalée',
             message=(
                 f'{student.user.full_name} a été marqué(e) absent(e) '
-                f'en {session.subject.name} le {date_str}.'
+                f'en {subject_name} le {date_str}.'
             ),
             data={
                 'student_id': str(student.id),
                 'session_id': str(session.id),
                 'date': date_str,
+                'status': 'ABSENT',
             },
         )
         dispatch_notification(n)
@@ -293,6 +295,33 @@ def notify_absence_recorded(attendance_record):
 
 # kept for backward-compat
 notify_absence = notify_absence_recorded
+
+
+def notify_late_recorded(attendance_record):
+    """Retard constaté → parents (notification moins urgente qu'une absence)."""
+    student = attendance_record.student
+    session = attendance_record.attendance_session.session
+    date_str = str(attendance_record.attendance_session.date)
+    subject_name = session.subject.name if session and session.subject else 'cours'
+
+    for parent_user in _get_student_parents(student):
+        n = Notification.send(
+            recipient=parent_user,
+            notification_type='ATTENDANCE',
+            priority='NORMAL',
+            title='Retard signalé',
+            message=(
+                f'{student.user.full_name} est arrivé(e) en retard '
+                f'en {subject_name} le {date_str}.'
+            ),
+            data={
+                'student_id': str(student.id),
+                'session_id': str(session.id),
+                'date': date_str,
+                'status': 'LATE',
+            },
+        )
+        dispatch_notification(n)
 
 
 def notify_absence_planned(absence_request):

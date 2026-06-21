@@ -72,23 +72,36 @@ class StudentFileSerializer(serializers.ModelSerializer):
 
 class StudentSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
+    user_data = serializers.DictField(write_only=True, required=False)
     site_name = serializers.CharField(source='site.name', read_only=True)
     parents = serializers.SerializerMethodField()
     current_card = serializers.SerializerMethodField()
+    current_class = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
         fields = [
-            'id', 'user', 'matricule', 'gender', 'birth_date', 'birth_place',
+            'id', 'user', 'user_data', 'matricule', 'gender', 'birth_date', 'birth_place',
             'nationality', 'address', 'city', 'site', 'site_name', 'status',
             'admission_date', 'graduation_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
-            'medical_info', 'notes', 'photo', 'parents', 'current_card',
+            'medical_info', 'notes', 'photo', 'parents', 'current_card', 'current_class',
             'registration_fee', 'registration_fee_paid', 'tuition_fee',
             'total_paid', 'remaining_balance',
             'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'matricule', 'created_at', 'updated_at']
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop('user_data', None)
+        if user_data:
+            user = instance.user
+            allowed = ('first_name', 'last_name', 'phone')
+            for attr in allowed:
+                if attr in user_data and user_data[attr]:
+                    setattr(user, attr, user_data[attr])
+            user.save()
+        return super().update(instance, validated_data)
 
     def get_parents(self, obj):
         student_parents = obj.student_parents.select_related('parent__user')
@@ -102,6 +115,20 @@ class StudentSerializer(serializers.ModelSerializer):
             if card:
                 return StudentCardSerializer(card).data
         return None
+
+    def get_current_class(self, obj):
+        enrollment = obj.enrollments.filter(
+            status='ACTIVE', is_active=True
+        ).select_related('class_obj__level__program').first()
+        if not enrollment:
+            return None
+        c = enrollment.class_obj
+        return {
+            'id': str(c.id),
+            'name': c.name,
+            'level_name': c.level.name if c.level else None,
+            'program_name': c.level.program.name if c.level and c.level.program else None,
+        }
 
 
 class StudentCreateSerializer(serializers.ModelSerializer):
@@ -176,6 +203,7 @@ class StudentDossierSerializer(serializers.ModelSerializer):
     parents = serializers.SerializerMethodField()
     files = StudentFileSerializer(many=True, read_only=True)
     cards = StudentCardSerializer(many=True, read_only=True)
+    current_class = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
@@ -185,6 +213,7 @@ class StudentDossierSerializer(serializers.ModelSerializer):
             'admission_date', 'graduation_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'files', 'cards',
+            'current_class',
             'registration_fee', 'registration_fee_paid', 'tuition_fee',
             'total_paid', 'remaining_balance',
             'is_active', 'created_at', 'updated_at'
@@ -193,3 +222,18 @@ class StudentDossierSerializer(serializers.ModelSerializer):
     def get_parents(self, obj):
         student_parents = obj.student_parents.select_related('parent__user')
         return StudentParentSerializer(student_parents, many=True).data
+
+    def get_current_class(self, obj):
+        enrollment = obj.enrollments.filter(
+            status='ACTIVE', is_active=True
+        ).select_related('class_obj__level__program', 'academic_year').first()
+        if not enrollment:
+            return None
+        c = enrollment.class_obj
+        return {
+            'id': str(c.id),
+            'name': c.name,
+            'level_name': c.level.name if c.level else None,
+            'program_name': c.level.program.name if c.level and c.level.program else None,
+            'academic_year': enrollment.academic_year.name if enrollment.academic_year else None,
+        }

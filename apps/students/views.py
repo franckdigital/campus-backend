@@ -238,6 +238,34 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         return Response(StudentCardSerializer(card).data)
 
+    @action(detail=True, methods=['get'], url_path='financial-summary')
+    def financial_summary(self, request, pk=None):
+        """Compute real financial totals from invoices (not stale student fields)."""
+        from apps.finance.models import Invoice, Payment
+        from django.db.models import Sum
+
+        student = self.get_object()
+        invoices = Invoice.objects.filter(student=student, is_active=True)
+
+        total_tuition  = float(invoices.aggregate(t=Sum('total'))['t']       or 0)
+        total_paid     = float(invoices.aggregate(p=Sum('amount_paid'))['p'] or 0)
+        total_pending  = float(
+            Payment.objects.filter(
+                invoice__student=student, status='PENDING', is_active=True
+            ).aggregate(p=Sum('amount'))['p'] or 0
+        )
+        remaining = max(0.0, total_tuition - total_paid)
+
+        # Also keep student fields as fallback when no invoices exist yet
+        return Response({
+            'tuition_fee':         total_tuition or float(student.tuition_fee or 0),
+            'total_paid':          total_paid,
+            'remaining_balance':   remaining,
+            'total_pending':       total_pending,
+            'registration_fee':    float(student.registration_fee or 0),
+            'registration_fee_paid': student.registration_fee_paid,
+        })
+
 
 class StudentFileViewSet(viewsets.ModelViewSet):
     queryset = StudentFile.objects.select_related('student', 'academic_year', 'created_by').all()

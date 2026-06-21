@@ -47,6 +47,15 @@ def _notify_parents_on_absence(record):
         pass  # Never block attendance marking for notification errors
 
 
+def _notify_parents_on_late(record):
+    """Retard constaté → parents."""
+    try:
+        from apps.notifications.services import notify_late_recorded
+        notify_late_recorded(record)
+    except Exception:
+        pass
+
+
 class AttendanceSessionViewSet(viewsets.ModelViewSet):
     queryset = AttendanceSession.objects.select_related(
         'session__class_obj', 'session__subject', 'session__teacher__user', 'opened_by'
@@ -244,6 +253,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
 
         if new_status == 'ABSENT':
             _notify_parents_on_absence(record)
+        elif new_status == 'LATE':
+            _notify_parents_on_late(record)
 
         return Response(
             AttendanceRecordSerializer(record).data,
@@ -289,6 +300,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     )
                     if new_status == 'ABSENT':
                         _notify_parents_on_absence(record)
+                    elif new_status == 'LATE':
+                        _notify_parents_on_late(record)
                     count += 1
                 except Student.DoesNotExist:
                     continue
@@ -315,6 +328,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     )
                     if bulk_status == 'ABSENT':
                         _notify_parents_on_absence(record)
+                    elif bulk_status == 'LATE':
+                        _notify_parents_on_late(record)
                     count += 1
                 except Student.DoesNotExist:
                     continue
