@@ -84,6 +84,16 @@ class TeacherViewSet(viewsets.ModelViewSet):
             return TeacherProfileCreateSerializer
         return TeacherProfileSerializer
 
+    @action(detail=False, methods=['get'], url_path='me')
+    def me(self, request):
+        """Return the TeacherProfile of the currently authenticated user."""
+        try:
+            teacher = TeacherProfile.objects.select_related('user').get(user=request.user)
+            serializer = TeacherProfileSerializer(teacher, context={'request': request})
+            return Response(serializer.data)
+        except TeacherProfile.DoesNotExist:
+            return Response({'detail': 'Profil enseignant non trouvé.'}, status=status.HTTP_404_NOT_FOUND)
+
     @action(detail=True, methods=['post'], url_path='assign-sites')
     def assign_sites(self, request, pk=None):
         teacher = self.get_object()
