@@ -122,7 +122,9 @@ class TeacherViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def sessions(self, request, pk=None):
         teacher = self.get_object()
-        sessions = teacher.sessions.select_related('class_obj', 'subject', 'room').filter(is_active=True)
+        sessions = teacher.sessions.select_related(
+            'class_obj__site', 'class_obj__academic_year', 'subject', 'room', 'semester'
+        ).filter(is_active=True)
         serializer = SessionSerializer(sessions, many=True)
         return Response(serializer.data)
 
