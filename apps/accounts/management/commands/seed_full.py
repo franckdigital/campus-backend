@@ -50,40 +50,60 @@ SITES_DATA = [
 ]
 
 # (nom, code, type, durée_ans)
+# Chaque site ITA a son propre type pour des curricula distincts
 PROGRAMS_DATA = {
-    'ITA-MARC': ('Licence Informatique',          'LI-MARC',   'info',    3),
-    'ITA-PLAT': ('Licence Informatique',          'LI-PLAT',   'info',    3),
-    'ITA-2PL':  ('Licence Informatique',          'LI-2PL',    'info',    3),
-    'PIGIER':   ('BTS Comptabilite',              'BTS-PIG',   'gestion', 2),
-    'ISPA':     ('BTS Informatique de Gestion',   'BTS-ISPA',  'mixed',   2),
+    'ITA-MARC': ('Licence Informatique',          'LI-MARC',   'info_marc', 3),
+    'ITA-PLAT': ('Licence Informatique',          'LI-PLAT',   'info_plat', 3),
+    'ITA-2PL':  ('Licence Informatique',          'LI-2PL',    'info_2pl',  3),
+    'PIGIER':   ('BTS Comptabilite',              'BTS-PIG',   'gestion',   2),
+    'ISPA':     ('BTS Informatique de Gestion',   'BTS-ISPA',  'mixed',     2),
 }
 
 SUBJECTS = [
     # code, nom, coefficient, heures/semaine
     ('ALG101', 'Algorithmique et structures de donnees', 4, 4),
     ('PRG101', 'Programmation Python',                   3, 3),
+    ('PRG201', 'Programmation Java',                     3, 3),
+    ('PRG301', 'Programmation C et C++',                 3, 3),
     ('MAT101', 'Mathematiques discretes',                3, 3),
+    ('MAT201', 'Analyse et algebre lineaire',            3, 3),
+    ('MAT301', 'Probabilites et statistiques',           3, 3),
     ('RES101', 'Reseaux informatiques',                  3, 3),
+    ('RES201', 'Architecture des reseaux',               3, 3),
     ('BDD101', 'Bases de donnees relationnelles',        3, 4),
+    ('BDD201', 'Bases de donnees avancees',              3, 3),
     ('WEB201', 'Developpement web full-stack',           4, 4),
+    ('WEB301', 'Frameworks et API REST',                 3, 3),
     ('SYS201', "Systemes d'exploitation",                3, 3),
+    ('SYS301', 'Administration systemes Linux',          3, 3),
+    ('SEC101', 'Securite informatique',                  3, 3),
     ('ANG101', 'Anglais technique',                      2, 2),
     ('COM101', 'Communication professionnelle',          2, 2),
     ('GES101', 'Introduction a la gestion',              3, 3),
     ('CPT101', 'Comptabilite generale',                  4, 4),
+    ('CPT201', 'Comptabilite analytique',                4, 4),
     ('MKT101', 'Marketing fondamental',                  3, 3),
+    ('MKT201', 'Marketing digital',                      3, 3),
     ('DRT101', 'Droit des affaires',                     2, 2),
     ('ECO101', 'Economie generale',                      3, 3),
     ('FIN201', "Finance d'entreprise",                   3, 3),
+    ('FIN301', 'Gestion financiere',                     3, 3),
     ('INF101', "Introduction a l'informatique",          3, 3),
     ('RH201',  'Gestion des ressources humaines',        3, 3),
-    ('MAT201', 'Analyse et algebre lineaire',            3, 3),
+    ('PRJ101', 'Gestion de projets informatiques',       3, 3),
 ]
 
 SUBJECTS_BY_TYPE = {
-    'info':    ['ALG101', 'PRG101', 'MAT101', 'RES101', 'BDD101', 'ANG101', 'COM101'],
-    'gestion': ['GES101', 'CPT101', 'MKT101', 'DRT101', 'ECO101', 'ANG101', 'COM101'],
-    'mixed':   ['INF101', 'GES101', 'CPT101', 'MAT101', 'ANG101', 'COM101', 'ECO101'],
+    # ITA Marcory — Informatique fondamentale
+    'info_marc': ['ALG101', 'PRG101', 'MAT101', 'RES101', 'BDD101', 'ANG101', 'COM101'],
+    # ITA Plateaux — Informatique orientee web et reseaux
+    'info_plat': ['WEB201', 'WEB301', 'RES101', 'RES201', 'BDD101', 'SEC101', 'ANG101'],
+    # ITA 2 Plateaux — Informatique systemes et avancee
+    'info_2pl':  ['SYS201', 'SYS301', 'PRG201', 'MAT201', 'BDD201', 'PRJ101', 'ANG101'],
+    # PIGIER — Gestion et comptabilite
+    'gestion':   ['GES101', 'CPT101', 'MKT101', 'DRT101', 'ECO101', 'ANG101', 'COM101'],
+    # ISPA — Informatique de gestion
+    'mixed':     ['INF101', 'GES101', 'CPT101', 'MAT101', 'ANG101', 'COM101', 'ECO101'],
 }
 
 ADMINS_DATA = {
@@ -149,51 +169,61 @@ TEACHERS_DATA = {
 
 # (email, prenom, nom, genre, naissance, lieu_naissance, matricule)
 STUDENTS_DATA = {
-    'ITA-MARC': [
+    'ITA-MARC': [  # 6 étudiants
         ('i.kone@ita-marc.ci',    'Ibrahim',  'Kone',     'M', date(2003, 1, 22), 'Bouake',      'MARC-2024-001'),
         ('a.traore@ita-marc.ci',  'Aicha',    'Traore',   'F', date(2002, 8, 15), 'Abidjan',     'MARC-2024-002'),
         ('k.kouadio@ita-marc.ci', 'Kevin',    'Kouadio',  'M', date(2003, 5, 10), 'Yamoussoukro','MARC-2024-003'),
         ('r.adjoua@ita-marc.ci',  'Rebecca',  'Adjoua',   'F', date(2002,11,  3), 'Abidjan',     'MARC-2024-004'),
+        ('y.bile@ita-marc.ci',    'Yannick',  'Bile',     'M', date(2003, 3, 27), 'Daloa',       'MARC-2024-005'),
+        ('m.ake@ita-marc.ci',     'Mariam',   'Ake',      'F', date(2002, 7,  9), 'Abidjan',     'MARC-2024-006'),
     ],
-    'ITA-PLAT': [
+    'ITA-PLAT': [  # 5 étudiants
         ('m.dosso@ita-plat.ci',   'Mohamed',  'Dosso',   'M', date(2003, 3, 18), 'Korhogo', 'PLAT-2024-001'),
         ('e.gnaoule@ita-plat.ci', 'Estelle',  'Gnaoule', 'F', date(2002, 7, 25), 'Abidjan', 'PLAT-2024-002'),
         ('j.bah@ita-plat.ci',     'Junior',   'Bah',     'M', date(2003, 9, 12), 'Man',     'PLAT-2024-003'),
         ('p.ettien@ita-plat.ci',  'Patricia', 'Ettien',  'F', date(2002, 4,  6), 'Abidjan', 'PLAT-2024-004'),
+        ('a.sylla@ita-plat.ci',   'Abdoul',   'Sylla',   'M', date(2003, 6, 14), 'Bouake',  'PLAT-2024-005'),
     ],
-    'ITA-2PL': [
+    'ITA-2PL': [  # 4 étudiants
         ('s.ouattara@ita-2pl.ci', 'Siaka',    'Ouattara', 'M', date(2003, 2, 14), 'Bouake',      'DEUX-2024-001'),
         ('l.tape@ita-2pl.ci',     'Laurence', 'Tape',     'F', date(2002, 6, 20), 'Abidjan',     'DEUX-2024-002'),
         ('d.yeboua@ita-2pl.ci',   'David',    'Yeboua',   'M', date(2003,10,  8), 'Abengourou',  'DEUX-2024-003'),
         ('c.akpan@ita-2pl.ci',    'Celine',   'Akpan',    'F', date(2002,12,  1), 'Abidjan',     'DEUX-2024-004'),
     ],
-    'PIGIER': [
-        ('f.diarrassouba@pigier.ci', 'Fanta',   'Diarrassouba', 'F', date(2003, 4, 17), 'Abidjan',   'PIG-2024-001'),
-        ('n.guede@pigier.ci',        'Noel',    'Guede',        'M', date(2002, 9, 30), 'San-Pedro', 'PIG-2024-002'),
-        ('a.konan@pigier.ci',        'Aminata', 'Konan',        'F', date(2003, 7,  5), 'Abidjan',   'PIG-2024-003'),
-        ('b.kouame@pigier.ci',       'Boris',   'Kouame',       'M', date(2002, 3, 22), 'Bouafle',   'PIG-2024-004'),
+    'PIGIER': [  # 7 étudiants
+        ('f.diarrassouba@pigier.ci', 'Fanta',    'Diarrassouba', 'F', date(2003, 4, 17), 'Abidjan',   'PIG-2024-001'),
+        ('n.guede@pigier.ci',        'Noel',     'Guede',        'M', date(2002, 9, 30), 'San-Pedro', 'PIG-2024-002'),
+        ('a.konan@pigier.ci',        'Aminata',  'Konan',        'F', date(2003, 7,  5), 'Abidjan',   'PIG-2024-003'),
+        ('b.kouame@pigier.ci',       'Boris',    'Kouame',       'M', date(2002, 3, 22), 'Bouafle',   'PIG-2024-004'),
+        ('c.ble@pigier.ci',          'Christel', 'Ble',          'F', date(2003, 1, 19), 'Abidjan',   'PIG-2024-005'),
+        ('h.meite@pigier.ci',        'Hamza',    'Meite',        'M', date(2002,10, 11), 'Ferkesse',  'PIG-2024-006'),
+        ('j.daho@pigier.ci',         'Josiane',  'Daho',         'F', date(2003, 5,  3), 'Abidjan',   'PIG-2024-007'),
     ],
-    'ISPA': [
-        ('r.silue@ispa.ci',   'Rachid',   'Silue',  'M', date(2003, 8, 11), 'Ferkessedougou', 'ISPA-2024-001'),
-        ('o.kouakou@ispa.ci', 'Olivia',   'Kouakou','F', date(2002, 5, 28), 'Abidjan',        'ISPA-2024-002'),
-        ('t.koffi@ispa.ci',   'Thierry',  'Koffi',  'M', date(2003,11, 15), 'Daloa',          'ISPA-2024-003'),
-        ('n.adepe@ispa.ci',   'Nathalie', 'Adepe',  'F', date(2002, 2,  7), 'Abidjan',        'ISPA-2024-004'),
+    'ISPA': [  # 5 étudiants
+        ('r.silue@ispa.ci',   'Rachid',   'Silue',    'M', date(2003, 8, 11), 'Ferkessedougou', 'ISPA-2024-001'),
+        ('o.kouakou@ispa.ci', 'Olivia',   'Kouakou',  'F', date(2002, 5, 28), 'Abidjan',        'ISPA-2024-002'),
+        ('t.koffi@ispa.ci',   'Thierry',  'Koffi',    'M', date(2003,11, 15), 'Daloa',          'ISPA-2024-003'),
+        ('n.adepe@ispa.ci',   'Nathalie', 'Adepe',    'F', date(2002, 2,  7), 'Abidjan',        'ISPA-2024-004'),
+        ('s.coulibaly@ispa.ci','Seydou',  'Coulibaly','M', date(2003, 4, 22), 'Korhogo',        'ISPA-2024-005'),
     ],
 }
 
 # (email, prenom, nom, profession, employeur, lien_parente)
 PARENTS_DATA = {
     'ITA-MARC': [
-        ('p.kone@gmail.com',    'Mamadou',   'Kone',      'Ingenieur',     'BNETD',            'FATHER'),
+        ('p.kone@gmail.com',    'Mamadou',   'Kone',      'Ingenieur',     'BNETD',             'FATHER'),
         ('p.traore@gmail.com',  'Rokia',     'Coulibaly', 'Commercante',   'Auto-entrepreneur', 'MOTHER'),
-        ('p.kouadio@gmail.com', 'Konan',     'Kouadio',   'Fonctionnaire', 'Min. Education',   'FATHER'),
-        ('p.adjoua@gmail.com',  'Yolande',   'Assoumou',  'Infirmiere',    'CHU Cocody',       'MOTHER'),
+        ('p.kouadio@gmail.com', 'Konan',     'Kouadio',   'Fonctionnaire', 'Min. Education',    'FATHER'),
+        ('p.adjoua@gmail.com',  'Yolande',   'Assoumou',  'Infirmiere',    'CHU Cocody',        'MOTHER'),
+        ('p.bile@gmail.com',    'Gervais',   'Bile',      'Enseignant',    'Lycee Technique',   'FATHER'),
+        ('p.ake@gmail.com',     'Fatoumata', 'Ake',       'Sage-femme',    'Maternite Marcory', 'MOTHER'),
     ],
     'ITA-PLAT': [
         ('p.dosso@gmail.com',   'Issouf',    'Dosso',    'Commercant',   'Auto-entrepreneur', 'FATHER'),
         ('p.gnaoule@gmail.com', 'Suzanne',   'Gnaoule',  'Enseignante',  'Lycee Technique',   'MOTHER'),
         ('p.bah@gmail.com',     'Alpha',     'Bah',      'Chauffeur',    'SOTRA',             'FATHER'),
         ('p.ettien@gmail.com',  'Clemence',  'Ettien',   'Couturiere',   'Auto-entrepreneur', 'MOTHER'),
+        ('p.sylla@gmail.com',   'Moussa',    'Sylla',    'Technicien',   'SODECI',            'FATHER'),
     ],
     'ITA-2PL': [
         ('p.ouattara@gmail.com', 'Brahima',    'Ouattara', 'Agriculteur', 'Auto-entrepreneur', 'FATHER'),
@@ -205,13 +235,17 @@ PARENTS_DATA = {
         ('p.diarrassouba@gmail.com', 'Lassina',   'Diarrassouba', 'Transporteur', 'Auto-entrepreneur', 'FATHER'),
         ('p.guede@gmail.com',        'Bernadette','Guede',        'Commercante',  'Marche Cocody',     'MOTHER'),
         ('p.konan@gmail.com',        'Yao',       'Konan',        'Policier',     'DGPN',              'FATHER'),
-        ('p.kouame@gmail.com',       'Philomene', 'Kouame',       'Menagere',     '',                  'MOTHER'),
+        ('p.kouame@gmail.com',        'Philomene', 'Kouame',       'Menagere',     '',                  'MOTHER'),
+        ('p.ble@gmail.com',           'Auguste',   'Ble',          'Comptable',    'Cabinet Audit CI',  'FATHER'),
+        ('p.meite@gmail.com',         'Fatouma',   'Meite',        'Coiffeuse',    'Auto-entrepreneur', 'MOTHER'),
+        ('p.daho@gmail.com',          'Celestin',  'Daho',         'Gendarme',     'FACI',              'FATHER'),
     ],
     'ISPA': [
-        ('p.silue@gmail.com',   'Hamidou',   'Silue',    'Commercant',  'Marche Korhogo',    'FATHER'),
-        ('p.kouakou@gmail.com', 'Julienne',  'Kouakou',  'Coiffeuse',   'Auto-entrepreneur', 'MOTHER'),
-        ('p.koffi@gmail.com',   'Lambert',   'Koffi',    'Menuisier',   'Atelier Koffi',     'FATHER'),
-        ('p.adepe@gmail.com',   'Veronique', 'Adepe',    'Couturiere',  'Auto-entrepreneur', 'MOTHER'),
+        ('p.silue@gmail.com',      'Hamidou',   'Silue',     'Commercant',  'Marche Korhogo',    'FATHER'),
+        ('p.kouakou@gmail.com',    'Julienne',  'Kouakou',   'Coiffeuse',   'Auto-entrepreneur', 'MOTHER'),
+        ('p.koffi@gmail.com',      'Lambert',   'Koffi',     'Menuisier',   'Atelier Koffi',     'FATHER'),
+        ('p.adepe@gmail.com',      'Veronique', 'Adepe',     'Couturiere',  'Auto-entrepreneur', 'MOTHER'),
+        ('p.coulibaly@gmail.com',  'Oumar',     'Coulibaly', 'Fonctionnaire','Min. Commerce',    'FATHER'),
     ],
 }
 

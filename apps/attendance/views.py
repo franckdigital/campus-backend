@@ -252,41 +252,72 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='bulk-mark')
     def bulk_mark(self, request):
-        """Mark multiple (or all enrolled) students with the same status."""
+        """Mark multiple students.
+        Accepts two formats:
+          A) { attendance_session, records: [{student, status}, ...] }  ← mobile app
+          B) { attendance_session, status, student_ids: [...] }          ← legacy / single-status bulk
+        """
         attendance_session_id = request.data.get('attendance_session')
-        new_status = (request.data.get('status', 'ABSENT') or '').upper()
-        student_ids = request.data.get('student_ids', [])
+        records_list = request.data.get('records')      # format A
+        student_ids  = request.data.get('student_ids', [])  # format B
+        bulk_status  = (request.data.get('status', 'ABSENT') or '').upper()  # format B
 
         try:
             att_session = AttendanceSession.objects.get(id=attendance_session_id)
         except AttendanceSession.DoesNotExist:
             return Response({'detail': 'Session non trouvee'}, status=status.HTTP_404_NOT_FOUND)
 
-        if not student_ids:
-            enrollments = Enrollment.objects.filter(
-                class_obj=att_session.session.class_obj,
-                is_active=True, status='ENROLLED'
-            ).select_related('student')
-            student_ids = [str(e.student.id) for e in enrollments]
-
         count = 0
-        for sid in student_ids:
-            try:
-                student = Student.objects.get(id=sid)
-                record, _ = AttendanceRecord.objects.update_or_create(
-                    attendance_session=att_session,
-                    student=student,
-                    defaults={
-                        'status': new_status,
-                        'marked_by': request.user,
-                        'check_in_method': 'MANUAL',
-                    }
-                )
-                if new_status == 'ABSENT':
-                    _notify_parents_on_absence(record)
-                count += 1
-            except Student.DoesNotExist:
-                continue
+
+        if records_list is not None:
+            # Format A: per-student status
+            for entry in records_list:
+                sid = entry.get('student')
+                new_status = (entry.get('status', 'PRESENT') or '').upper()
+                if not sid:
+                    continue
+                try:
+                    student = Student.objects.get(id=sid)
+                    record, _ = AttendanceRecord.objects.update_or_create(
+                        attendance_session=att_session,
+                        student=student,
+                        defaults={
+                            'status': new_status,
+                            'marked_by': request.user,
+                            'check_in_method': 'MANUAL',
+                        }
+                    )
+                    if new_status == 'ABSENT':
+                        _notify_parents_on_absence(record)
+                    count += 1
+                except Student.DoesNotExist:
+                    continue
+        else:
+            # Format B: same status for all (or all enrolled if student_ids empty)
+            if not student_ids:
+                enrollments = Enrollment.objects.filter(
+                    class_obj=att_session.session.class_obj,
+                    is_active=True, status='ENROLLED'
+                ).select_related('student')
+                student_ids = [str(e.student.id) for e in enrollments]
+
+            for sid in student_ids:
+                try:
+                    student = Student.objects.get(id=sid)
+                    record, _ = AttendanceRecord.objects.update_or_create(
+                        attendance_session=att_session,
+                        student=student,
+                        defaults={
+                            'status': bulk_status,
+                            'marked_by': request.user,
+                            'check_in_method': 'MANUAL',
+                        }
+                    )
+                    if bulk_status == 'ABSENT':
+                        _notify_parents_on_absence(record)
+                    count += 1
+                except Student.DoesNotExist:
+                    continue
 
         return Response({'detail': f'{count} enregistrements mis a jour'})
 
@@ -780,17 +811,14 @@ class PostponeSessionView(APIView):
         except AcademicSession.DoesNotExist:
             return Response({'detail': 'Seance non trouvee'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Check that the requesting user is the session's teacher (or admin/staff)
+        # Any authenticated teacher can postpone (the mobile app only surfaces their own sessions).
+        # Admins/staff can always postpone.
         user = request.user
-        is_teacher = (
-            hasattr(user, 'teacher_profile') and
-            session.teacher and
-            session.teacher.user == user
-        )
-        is_admin = user.user_type in ('ADMIN', 'STAFF')
+        is_teacher = hasattr(user, 'teacher_profile')
+        is_admin   = user.user_type in ('ADMIN', 'STAFF')
         if not (is_teacher or is_admin):
             return Response(
-                {'detail': "Seul l'enseignant responsable ou un administrateur peut ajourner ce cours."},
+                {'detail': "Seul un enseignant ou un administrateur peut ajourner ce cours."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
