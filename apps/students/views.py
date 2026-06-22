@@ -57,11 +57,26 @@ class ParentViewSet(viewsets.ModelViewSet):
 
 
 class StudentViewSet(viewsets.ModelViewSet):
-    queryset = Student.objects.select_related('user', 'site').all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['matricule', 'user__email', 'user__first_name', 'user__last_name']
     ordering_fields = ['user__last_name', 'matricule', 'admission_date']
     filterset_fields = ['status', 'is_active', 'site', 'gender']
+
+    def get_queryset(self):
+        base = Student.objects.select_related('user', 'site')
+        if self.action == 'list':
+            from django.db.models import Prefetch
+            from apps.academic.models import Enrollment
+            return base.prefetch_related(
+                Prefetch(
+                    'enrollments',
+                    queryset=Enrollment.objects.filter(
+                        status='ACTIVE', is_active=True
+                    ).select_related('class_obj__level__program'),
+                    to_attr='active_enrollments',
+                )
+            )
+        return base.all()
 
     def get_serializer_class(self):
         if self.action == 'list':

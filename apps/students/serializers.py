@@ -149,7 +149,7 @@ class StudentSerializer(serializers.ModelSerializer):
     def get_current_class(self, obj):
         enrollment = obj.enrollments.filter(
             status='ACTIVE', is_active=True
-        ).select_related('class_obj__level__program').first()
+        ).select_related('class_obj__level__program', 'academic_year').first()
         if not enrollment:
             return None
         c = enrollment.class_obj
@@ -158,6 +158,8 @@ class StudentSerializer(serializers.ModelSerializer):
             'name': c.name,
             'level_name': c.level.name if c.level else None,
             'program_name': c.level.program.name if c.level and c.level.program else None,
+            'academic_year': enrollment.academic_year.name if enrollment.academic_year else None,
+            'academic_year_id': str(enrollment.academic_year.id) if enrollment.academic_year else None,
         }
 
 
@@ -218,13 +220,29 @@ class StudentListSerializer(serializers.ModelSerializer):
     email = serializers.CharField(source='user.email', read_only=True)
     phone = serializers.CharField(source='user.phone', read_only=True)
     site_name = serializers.CharField(source='site.name', read_only=True)
+    program_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
         fields = [
             'id', 'matricule', 'full_name', 'email', 'phone',
-            'gender', 'site', 'site_name', 'status', 'is_active'
+            'gender', 'site', 'site_name', 'status', 'is_active',
+            'registration_fee_paid', 'program_name',
         ]
+
+    def get_program_name(self, obj):
+        # Use prefetched data (to_attr='active_enrollments') when available
+        enrollments = getattr(obj, 'active_enrollments', None)
+        if enrollments is not None:
+            enrollment = enrollments[0] if enrollments else None
+        else:
+            enrollment = obj.enrollments.filter(
+                status='ACTIVE', is_active=True
+            ).select_related('class_obj__level__program').first()
+        if enrollment and enrollment.class_obj and enrollment.class_obj.level:
+            prog = enrollment.class_obj.level.program
+            return prog.name if prog else None
+        return None
 
 
 class StudentDossierSerializer(serializers.ModelSerializer):
@@ -266,4 +284,5 @@ class StudentDossierSerializer(serializers.ModelSerializer):
             'level_name': c.level.name if c.level else None,
             'program_name': c.level.program.name if c.level and c.level.program else None,
             'academic_year': enrollment.academic_year.name if enrollment.academic_year else None,
+            'academic_year_id': str(enrollment.academic_year.id) if enrollment.academic_year else None,
         }
