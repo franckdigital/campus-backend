@@ -18,17 +18,18 @@ def _is_expo_token(token):
     )
 
 
-def send_expo_push(tokens, title, body, data=None, sound='default', badge=1):
+def send_expo_push(tokens, title, body, data=None, sound='default', badge=1, channel_id=None):
     """
     Send push to a list of Expo tokens.
     Returns (success_count, list_of_failed_items).
+    channel_id: Android notification channel ('payments', 'attendance', 'default').
     """
     valid = [t for t in tokens if _is_expo_token(t)]
     if not valid:
         return 0, []
 
-    messages = [
-        {
+    def _build_message(token):
+        msg = {
             'to':    token,
             'title': title,
             'body':  body,
@@ -36,8 +37,11 @@ def send_expo_push(tokens, title, body, data=None, sound='default', badge=1):
             'sound': sound,
             'badge': badge,
         }
-        for token in valid
-    ]
+        if channel_id:
+            msg['channelId'] = channel_id
+        return msg
+
+    messages = [_build_message(t) for t in valid]
 
     try:
         resp = requests.post(
@@ -78,9 +82,9 @@ def get_user_expo_tokens(user):
     )
 
 
-def push_to_user(user, title, body, data=None):
+def push_to_user(user, title, body, data=None, channel_id=None):
     """High-level helper: push to all active devices of a user."""
     tokens = get_user_expo_tokens(user)
     if tokens:
-        return send_expo_push(tokens, title, body, data=data)
+        return send_expo_push(tokens, title, body, data=data, channel_id=channel_id)
     return 0, []

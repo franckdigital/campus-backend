@@ -36,6 +36,7 @@ def on_payment_save(sender, instance, created, **kwargs):
                     'payment_id': str(instance.id),
                     'student_id': str(student.id),
                 },
+                channel_id='payments',
             )
 
         # Also push to the student
@@ -44,6 +45,7 @@ def on_payment_save(sender, instance, created, **kwargs):
             title='✅ Paiement confirmé',
             body=f'Votre paiement de {amount} FCFA a été validé (facture {inv_no}).',
             data={'type': 'PAYMENT', 'payment_id': str(instance.id)},
+            channel_id='payments',
         )
 
     except Exception as exc:

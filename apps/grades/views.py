@@ -179,10 +179,17 @@ class EvaluationViewSet(viewsets.ModelViewSet):
             except Student.DoesNotExist:
                 continue
 
-            grade, was_created = Grade.objects.update_or_create(
-                student=student,
-                evaluation=evaluation,
-                defaults={
+            try:
+                existing_qs = Grade.objects.filter(student=student, evaluation=evaluation)
+                existing_count = existing_qs.count()
+
+                if existing_count > 1:
+                    # Remove duplicates, keep the most recent
+                    oldest_ids = list(existing_qs.order_by('created_at').values_list('id', flat=True)[:-1])
+                    Grade.objects.filter(id__in=oldest_ids).delete()
+                    existing_count = 1
+
+                grade_defaults = {
                     'subject': evaluation.subject,
                     'class_group': evaluation.class_group,
                     'semester': evaluation.semester,
@@ -192,11 +199,15 @@ class EvaluationViewSet(viewsets.ModelViewSet):
                     'comment': item.get('comment', ''),
                     'entered_by': request.user,
                 }
-            )
-            if was_created:
-                created += 1
-            else:
-                updated += 1
+
+                if existing_count == 1:
+                    existing_qs.update(**grade_defaults)
+                    updated += 1
+                else:
+                    Grade.objects.create(student=student, evaluation=evaluation, **grade_defaults)
+                    created += 1
+            except Exception:
+                continue
 
         try:
             from apps.core.models import AuditLog

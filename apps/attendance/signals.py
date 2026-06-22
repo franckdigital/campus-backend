@@ -45,6 +45,7 @@ def on_attendance_record_save(sender, instance, created, **kwargs):
                     'date':       date_str,
                     'status':     instance.status,
                 },
+                channel_id='attendance',
             )
     except Exception as exc:
         logger.error("Attendance push-notify failed: %s", exc)
