@@ -5,7 +5,7 @@ from apps.accounts.serializers import UserSerializer, UserCreateSerializer
 
 class ParentSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
-    user_data = UserCreateSerializer(write_only=True, required=False)
+    user_data = serializers.DictField(write_only=True, required=False)
 
     class Meta:
         model = Parent
@@ -15,6 +15,30 @@ class ParentSerializer(serializers.ModelSerializer):
             'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        from apps.accounts.models import User
+        user_data = validated_data.pop('user_data', {})
+        password = user_data.pop('password', 'Campus2026!')
+        user_data.pop('password_confirm', None)
+        user_data['user_type'] = 'PARENT'
+        user = User.objects.create(**user_data)
+        user.set_password(password)
+        user.save()
+        return Parent.objects.create(user=user, **validated_data)
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop('user_data', None)
+        if user_data:
+            user = instance.user
+            for attr in ('first_name', 'last_name', 'phone'):
+                if attr in user_data:
+                    setattr(user, attr, user_data[attr])
+            new_email = user_data.get('email')
+            if new_email and new_email != user.email:
+                user.email = new_email
+            user.save()
+        return super().update(instance, validated_data)
 
 
 class ParentListSerializer(serializers.ModelSerializer):
@@ -96,10 +120,12 @@ class StudentSerializer(serializers.ModelSerializer):
         user_data = validated_data.pop('user_data', None)
         if user_data:
             user = instance.user
-            allowed = ('first_name', 'last_name', 'phone')
-            for attr in allowed:
+            for attr in ('first_name', 'last_name', 'phone'):
                 if attr in user_data and user_data[attr]:
                     setattr(user, attr, user_data[attr])
+            new_email = user_data.get('email')
+            if new_email and new_email != user.email:
+                user.email = new_email
             user.save()
         return super().update(instance, validated_data)
 

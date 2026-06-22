@@ -80,7 +80,7 @@ class Student(BaseModel):
     
     medical_info = models.TextField(blank=True)
     notes = models.TextField(blank=True)
-    photo = models.ImageField(upload_to='students/photos/', blank=True, null=True)
+    photo = models.TextField(blank=True, null=True)
     
     # Financial fields
     registration_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
