@@ -3,7 +3,7 @@ from rest_framework.routers import SimpleRouter as DefaultRouter
 from .views import (
     AccountingAccountViewSet, JournalEntryViewSet, JournalLineViewSet,
     AccountingExportView, TrialBalanceView,
-    RevenueReportView, UnpaidReportView, InitOHADAView,
+    RevenueReportView, UnpaidReportView, InitOHADAView, ReplayPaymentJournalView,
 )
 
 router = DefaultRouter()
@@ -17,5 +17,6 @@ urlpatterns = [
     path('accounting/reports/revenue/', RevenueReportView.as_view(), name='accounting-revenue-report'),
     path('accounting/reports/unpaid/', UnpaidReportView.as_view(), name='accounting-unpaid-report'),
     path('accounting/init-ohada/', InitOHADAView.as_view(), name='init-ohada'),
+    path('accounting/replay-journal/', ReplayPaymentJournalView.as_view(), name='replay-journal'),
     path('', include(router.urls)),
 ]

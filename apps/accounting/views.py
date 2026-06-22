@@ -353,3 +353,83 @@ class InitOHADAView(APIView):
             'created': created,
             'site_name': site.name,
         })
+
+
+class ReplayPaymentJournalView(APIView):
+    """Create journal entries retroactively for validated payments missing one."""
+    def post(self, request):
+        from apps.finance.models import Payment
+
+        site_id = request.data.get('site_id')
+
+        qs = Payment.objects.filter(status='SUCCESS').select_related(
+            'invoice__site', 'invoice__student__user'
+        )
+        if site_id:
+            qs = qs.filter(invoice__site_id=site_id)
+
+        journaled_ids = set(
+            JournalEntry.objects.filter(payment__isnull=False)
+                                .values_list('payment_id', flat=True)
+        )
+
+        created = 0
+        skipped = 0
+
+        for payment in qs:
+            if payment.id in journaled_ids:
+                skipped += 1
+                continue
+            site = getattr(payment.invoice, 'site', None) if payment.invoice else None
+            if not site:
+                skipped += 1
+                continue
+            revenue_account = AccountingAccount.objects.filter(
+                site=site, account_type='REVENUE', is_active=True
+            ).first()
+            asset_account = AccountingAccount.objects.filter(
+                site=site, account_type='ASSET', code__startswith='5', is_active=True
+            ).first()
+            if not (revenue_account and asset_account):
+                skipped += 1
+                continue
+            try:
+                student_name = (
+                    payment.invoice.student.user.full_name
+                    if payment.invoice.student and payment.invoice.student.user
+                    else 'Étudiant'
+                )
+                pay_date = (
+                    payment.payment_date.date()
+                    if hasattr(payment.payment_date, 'date')
+                    else payment.payment_date
+                )
+                entry = JournalEntry.objects.create(
+                    site=site,
+                    entry_date=pay_date,
+                    description=f'Paiement: {payment.invoice.invoice_number}',
+                    reference=getattr(payment, 'payment_number', ''),
+                    status='DRAFT',
+                    created_by=request.user,
+                    payment=payment,
+                )
+                JournalLine.objects.create(
+                    journal_entry=entry, account=asset_account,
+                    debit_amount=payment.amount, credit_amount=0,
+                    description=f'Règlement {student_name}',
+                )
+                JournalLine.objects.create(
+                    journal_entry=entry, account=revenue_account,
+                    debit_amount=0, credit_amount=payment.amount,
+                    description=f'Règlement {student_name}',
+                )
+                entry.post(request.user)
+                created += 1
+            except Exception:
+                skipped += 1
+
+        return Response({
+            'detail': f'{created} écriture(s) créée(s), {skipped} ignorée(s).',
+            'created': created,
+            'skipped': skipped,
+        })
