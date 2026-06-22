@@ -28,17 +28,21 @@ class ParentSerializer(serializers.ModelSerializer):
         return Parent.objects.create(user=user, **validated_data)
 
     def update(self, instance, validated_data):
-        user_data = validated_data.pop('user_data', None)
-        if user_data:
-            user = instance.user
-            for attr in ('first_name', 'last_name', 'phone'):
-                if attr in user_data:
-                    setattr(user, attr, user_data[attr])
-            new_email = user_data.get('email')
-            if new_email and new_email != user.email:
-                user.email = new_email
-            user.save()
-        return super().update(instance, validated_data)
+        try:
+            user_data = validated_data.pop('user_data', None)
+            if user_data:
+                user = instance.user
+                for attr in ('first_name', 'last_name', 'phone'):
+                    v = user_data.get(attr)
+                    if v:
+                        setattr(user, attr, v)
+                new_email = user_data.get('email')
+                if new_email and new_email != user.email:
+                    user.email = new_email
+                user.save()
+            return super().update(instance, validated_data)
+        except Exception as e:
+            raise serializers.ValidationError({'detail': str(e)})
 
 
 class ParentListSerializer(serializers.ModelSerializer):

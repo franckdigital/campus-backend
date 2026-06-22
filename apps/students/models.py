@@ -19,10 +19,14 @@ class Parent(BaseModel):
     relationship = models.CharField(
         max_length=50,
         choices=[
-            ('FATHER', 'Père'),
-            ('MOTHER', 'Mère'),
-            ('GUARDIAN', 'Tuteur'),
-            ('OTHER', 'Autre'),
+            ('FATHER',      'Père'),
+            ('MOTHER',      'Mère'),
+            ('GUARDIAN',    'Tuteur légal'),
+            ('UNCLE',       'Oncle'),
+            ('AUNT',        'Tante'),
+            ('GRANDPARENT', 'Grand-parent'),
+            ('SIBLING',     'Frère / Sœur'),
+            ('OTHER',       'Autre'),
         ],
         default='GUARDIAN'
     )
