@@ -304,6 +304,34 @@ class ReportCardViewSet(viewsets.ModelViewSet):
 
         return Response(ReportCardSerializer(cards, many=True).data)
 
+    @action(detail=False, methods=['post'], url_path='repair-ranks')
+    def repair_ranks(self, request):
+        """Re-rank all report cards: within each (class_group, semester), sort by average DESC and assign ranks 1..N."""
+        groups = ReportCard.objects.values('class_group', 'semester').distinct()
+        total_fixed = 0
+
+        for g in groups:
+            cards = list(ReportCard.objects.filter(
+                class_group_id=g['class_group'],
+                semester_id=g['semester'],
+                average__isnull=False,
+            ))
+            if not cards:
+                continue
+            cards.sort(key=lambda c: -float(c.average or 0))
+            n = len(cards)
+            for rank, card in enumerate(cards, 1):
+                if card.rank != rank or card.total_students != n:
+                    card.rank = rank
+                    card.total_students = n
+                    card.save(update_fields=['rank', 'total_students'])
+                    total_fixed += 1
+
+        return Response({
+            'detail': f'{total_fixed} bulletin(s) re-classé(s).',
+            'fixed': total_fixed,
+        })
+
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
         card = self.get_object()
