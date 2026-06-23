@@ -71,7 +71,7 @@ class StudentViewSet(viewsets.ModelViewSet):
                 Prefetch(
                     'enrollments',
                     queryset=Enrollment.objects.filter(
-                        status='ACTIVE', is_active=True
+                        status='ENROLLED', is_active=True
                     ).select_related('class_obj__level__program'),
                     to_attr='active_enrollments',
                 )

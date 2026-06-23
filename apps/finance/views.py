@@ -511,12 +511,18 @@ class CashTransactionViewSet(viewsets.ModelViewSet):
 
 
 class CashSessionViewSet(viewsets.ModelViewSet):
-    queryset = CashSession.objects.select_related(
-        'cash_register', 'opened_by', 'closed_by'
-    ).prefetch_related('transactions').all()
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['opened_at', 'closed_at']
     filterset_fields = ['cash_register', 'status', 'is_active']
+
+    def get_queryset(self):
+        qs = CashSession.objects.select_related(
+            'cash_register', 'opened_by', 'closed_by'
+        ).prefetch_related('transactions').all()
+        site = self.request.query_params.get('site')
+        if site:
+            qs = qs.filter(cash_register__site_id=site)
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'list':

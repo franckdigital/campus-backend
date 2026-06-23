@@ -148,7 +148,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
     def get_current_class(self, obj):
         enrollment = obj.enrollments.filter(
-            status='ACTIVE', is_active=True
+            status='ENROLLED', is_active=True
         ).select_related('class_obj__level__program', 'academic_year').first()
         if not enrollment:
             return None
@@ -206,7 +206,7 @@ class StudentCreateSerializer(serializers.ModelSerializer):
                         student=student,
                         class_obj=class_obj,
                         academic_year=academic_year,
-                        status='ACTIVE',
+                        status='ENROLLED',
                         is_active=True
                     )
             except Class.DoesNotExist:
@@ -231,13 +231,12 @@ class StudentListSerializer(serializers.ModelSerializer):
         ]
 
     def get_program_name(self, obj):
-        # Use prefetched data (to_attr='active_enrollments') when available
         enrollments = getattr(obj, 'active_enrollments', None)
         if enrollments is not None:
             enrollment = enrollments[0] if enrollments else None
         else:
             enrollment = obj.enrollments.filter(
-                status='ACTIVE', is_active=True
+                status='ENROLLED', is_active=True
             ).select_related('class_obj__level__program').first()
         if enrollment and enrollment.class_obj and enrollment.class_obj.level:
             prog = enrollment.class_obj.level.program
@@ -273,7 +272,7 @@ class StudentDossierSerializer(serializers.ModelSerializer):
 
     def get_current_class(self, obj):
         enrollment = obj.enrollments.filter(
-            status='ACTIVE', is_active=True
+            status='ENROLLED', is_active=True
         ).select_related('class_obj__level__program', 'academic_year').first()
         if not enrollment:
             return None

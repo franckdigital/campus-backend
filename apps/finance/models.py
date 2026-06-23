@@ -256,6 +256,21 @@ class Payment(BaseModel):
             self.validated_by = user
             self.save()
             self.invoice.add_payment(self.amount)
+            # Auto-flag registration_fee_paid when a registration invoice is fully paid
+            try:
+                self.invoice.refresh_from_db()
+                if self.invoice.status == 'PAID':
+                    is_reg = (
+                        self.invoice.items.filter(fee_type__code__icontains='REGISTRATION').exists()
+                        or 'inscription' in (self.invoice.notes or '').lower()
+                    )
+                    if is_reg:
+                        student = self.invoice.student
+                        if not student.registration_fee_paid:
+                            student.registration_fee_paid = True
+                            student.save(update_fields=['registration_fee_paid'])
+            except Exception:
+                pass
             return True
         return False
 
