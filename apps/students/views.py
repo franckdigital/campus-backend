@@ -284,21 +284,23 @@ class StudentViewSet(viewsets.ModelViewSet):
         )
         remaining = max(0.0, total_tuition - total_paid)
 
-        # Look up FeeConfiguration for the student's active enrollment
+        # Look up FeeConfiguration — try enrollment level first, fall back to site-only
         configured_tuition = float(student.tuition_fee or 0)
         configured_registration = float(student.registration_fee or 0)
         try:
             enrollment = student.enrollments.filter(
                 is_active=True
             ).select_related('class_obj__level', 'academic_year').order_by('-created_at').first()
+            level = None
+            academic_year = None
             if enrollment:
                 level = enrollment.class_obj.level if enrollment.class_obj else None
-                fee_config = FeeConfiguration.get_for_enrollment(
-                    student.site, level, enrollment.academic_year
-                )
-                if fee_config:
-                    configured_tuition = float(fee_config.tuition_fee)
-                    configured_registration = float(fee_config.registration_fee)
+                academic_year = enrollment.academic_year
+            # Always attempt lookup — get_for_enrollment falls back to site-only when level=None
+            fee_config = FeeConfiguration.get_for_enrollment(student.site, level, academic_year)
+            if fee_config:
+                configured_tuition = float(fee_config.tuition_fee)
+                configured_registration = float(fee_config.registration_fee)
         except Exception:
             pass
 
