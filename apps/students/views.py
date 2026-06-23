@@ -33,6 +33,19 @@ class ParentViewSet(viewsets.ModelViewSet):
         serializer = StudentListSerializer(students, many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['post'], url_path='reset-password')
+    def reset_password(self, request, pk=None):
+        parent = self.get_object()
+        new_password = request.data.get('password', '').strip()
+        if len(new_password) < 6:
+            return Response(
+                {'detail': 'Le mot de passe doit contenir au moins 6 caractères.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        parent.user.set_password(new_password)
+        parent.user.save()
+        return Response({'detail': 'Mot de passe réinitialisé avec succès.'})
+
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
         """Get the parent profile of the currently authenticated user."""

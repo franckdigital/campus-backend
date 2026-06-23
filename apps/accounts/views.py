@@ -103,6 +103,19 @@ class UserViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save()
 
+    @action(detail=True, methods=['post'], url_path='reset-password')
+    def reset_password(self, request, pk=None):
+        user = self.get_object()
+        new_password = request.data.get('password', '').strip()
+        if len(new_password) < 6:
+            return Response(
+                {'detail': 'Le mot de passe doit contenir au moins 6 caractères.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        user.set_password(new_password)
+        user.save()
+        return Response({'detail': 'Mot de passe réinitialisé avec succès.'})
+
     @action(detail=True, methods=['post'])
     def assign_role(self, request, pk=None):
         user = self.get_object()
