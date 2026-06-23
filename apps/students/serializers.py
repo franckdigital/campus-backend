@@ -21,6 +21,15 @@ class ParentSerializer(serializers.ModelSerializer):
         user_data = validated_data.pop('user_data', {})
         password = user_data.pop('password', 'Campus2026!')
         user_data.pop('password_confirm', None)
+        email = user_data.get('email', '').strip()
+
+        existing_user = User.objects.filter(email=email).first() if email else None
+        if existing_user:
+            try:
+                return existing_user.parent_profile
+            except Parent.DoesNotExist:
+                return Parent.objects.create(user=existing_user, **validated_data)
+
         user_data['user_type'] = 'PARENT'
         user = User.objects.create(**user_data)
         user.set_password(password)
