@@ -752,14 +752,29 @@ class FeeConfigurationViewSet(viewsets.ModelViewSet):
             'site', 'program', 'level', 'academic_year'
         )
         p = self.request.query_params
-        if p.get('site'):
-            qs = qs.filter(site_id=p['site'].replace('-', ''))
-        if p.get('program'):
-            qs = qs.filter(program_id=p['program'].replace('-', ''))
-        if p.get('level'):
-            qs = qs.filter(level_id=p['level'].replace('-', ''))
-        if p.get('academic_year'):
-            qs = qs.filter(academic_year_id=p['academic_year'].replace('-', ''))
-        if p.get('is_active') is not None and p.get('is_active') != '':
-            qs = qs.filter(is_active=p['is_active'].lower() in ('true', '1', 'yes'))
+
+        # UUID FK filters via extra() to avoid MySQL collation mismatch
+        # (column utf8mb4_unicode_ci vs connection utf8mb4_0900_ai_ci)
+        where_clauses = []
+        params = []
+        for qp_name, col_name in [
+            ('site',          'site_id'),
+            ('program',       'program_id'),
+            ('level',         'level_id'),
+            ('academic_year', 'academic_year_id'),
+        ]:
+            val = p.get(qp_name)
+            if val:
+                where_clauses.append(
+                    f"fee_configurations.{col_name} COLLATE utf8mb4_bin = %s"
+                )
+                params.append(val.replace('-', ''))
+
+        if where_clauses:
+            qs = qs.extra(where=where_clauses, params=params)
+
+        is_active = p.get('is_active')
+        if is_active is not None and is_active != '':
+            qs = qs.filter(is_active=is_active.lower() in ('true', '1', 'yes'))
+
         return qs

@@ -268,8 +268,8 @@ class StudentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='financial-summary')
     def financial_summary(self, request, pk=None):
-        """Compute real financial totals from invoices (not stale student fields)."""
-        from apps.finance.models import Invoice, Payment
+        """Compute real financial totals from invoices, with FeeConfiguration as fallback."""
+        from apps.finance.models import Invoice, Payment, FeeConfiguration
         from django.db.models import Sum
 
         student = self.get_object()
@@ -284,14 +284,33 @@ class StudentViewSet(viewsets.ModelViewSet):
         )
         remaining = max(0.0, total_tuition - total_paid)
 
-        # Also keep student fields as fallback when no invoices exist yet
+        # Look up FeeConfiguration for the student's active enrollment
+        configured_tuition = float(student.tuition_fee or 0)
+        configured_registration = float(student.registration_fee or 0)
+        try:
+            enrollment = student.enrollments.filter(
+                is_active=True
+            ).select_related('class_obj__level', 'academic_year').order_by('-created_at').first()
+            if enrollment:
+                level = enrollment.class_obj.level if enrollment.class_obj else None
+                fee_config = FeeConfiguration.get_for_enrollment(
+                    student.site, level, enrollment.academic_year
+                )
+                if fee_config:
+                    configured_tuition = float(fee_config.tuition_fee)
+                    configured_registration = float(fee_config.registration_fee)
+        except Exception:
+            pass
+
         return Response({
-            'tuition_fee':         total_tuition or float(student.tuition_fee or 0),
-            'total_paid':          total_paid,
-            'remaining_balance':   remaining,
-            'total_pending':       total_pending,
-            'registration_fee':    float(student.registration_fee or 0),
-            'registration_fee_paid': student.registration_fee_paid,
+            'tuition_fee':              total_tuition or configured_tuition,
+            'total_paid':               total_paid,
+            'remaining_balance':        remaining,
+            'total_pending':            total_pending,
+            'registration_fee':         configured_registration,
+            'registration_fee_paid':    student.registration_fee_paid,
+            'configured_tuition_fee':   configured_tuition,
+            'configured_registration_fee': configured_registration,
         })
 
 
