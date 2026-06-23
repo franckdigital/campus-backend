@@ -165,10 +165,13 @@ class StudentSerializer(serializers.ModelSerializer):
         return {
             'id': str(c.id),
             'name': c.name,
+            'level_id': str(c.level.id) if c.level else None,
             'level_name': c.level.name if c.level else None,
+            'program_id': str(c.level.program.id) if c.level and c.level.program else None,
             'program_name': c.level.program.name if c.level and c.level.program else None,
             'academic_year': enrollment.academic_year.name if enrollment.academic_year else None,
             'academic_year_id': str(enrollment.academic_year.id) if enrollment.academic_year else None,
+            'enrollment_id': str(enrollment.id),
         }
 
 
@@ -289,8 +292,11 @@ class StudentDossierSerializer(serializers.ModelSerializer):
         return {
             'id': str(c.id),
             'name': c.name,
+            'level_id': str(c.level.id) if c.level else None,
             'level_name': c.level.name if c.level else None,
+            'program_id': str(c.level.program.id) if c.level and c.level.program else None,
             'program_name': c.level.program.name if c.level and c.level.program else None,
             'academic_year': enrollment.academic_year.name if enrollment.academic_year else None,
             'academic_year_id': str(enrollment.academic_year.id) if enrollment.academic_year else None,
+            'enrollment_id': str(enrollment.id),
         }
