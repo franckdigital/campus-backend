@@ -4,7 +4,7 @@ from .views import (
     FeeTypeViewSet, PaymentMethodViewSet, InvoiceViewSet, PaymentViewSet,
     CashRegisterViewSet, CashSessionViewSet, CashTransactionViewSet,
     CashPaymentView, CashSessionOpenView, CashReportView,
-    BankAccountViewSet, ExpenseViewSet
+    BankAccountViewSet, ExpenseViewSet, FeeConfigurationViewSet
 )
 
 router = DefaultRouter()
@@ -17,6 +17,7 @@ router.register(r'cash-sessions', CashSessionViewSet, basename='cash-session')
 router.register(r'cash-transactions', CashTransactionViewSet, basename='cash-transaction')
 router.register(r'bank-accounts', BankAccountViewSet, basename='bank-account')
 router.register(r'expenses', ExpenseViewSet, basename='expense')
+router.register(r'fee-configurations', FeeConfigurationViewSet, basename='fee-configuration')
 
 urlpatterns = [
     path('payments/cash/', CashPaymentView.as_view(), name='cash-payment'),

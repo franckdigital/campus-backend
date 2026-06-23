@@ -10,7 +10,8 @@ from django.db.models import Sum
 
 from .models import (
     FeeType, Invoice, InvoiceItem, PaymentMethod, Payment,
-    CashRegister, CashSession, CashTransaction, BankAccount, Expense
+    CashRegister, CashSession, CashTransaction, BankAccount, Expense,
+    FeeConfiguration
 )
 from .serializers import (
     FeeTypeSerializer, InvoiceSerializer, InvoiceListSerializer,
@@ -18,7 +19,8 @@ from .serializers import (
     PaymentMethodSerializer, PaymentSerializer,
     CashRegisterSerializer, CashSessionSerializer, CashSessionListSerializer,
     CashTransactionSerializer, CashPaymentSerializer,
-    BankAccountSerializer, ExpenseSerializer
+    BankAccountSerializer, ExpenseSerializer,
+    FeeConfigurationSerializer
 )
 
 
@@ -736,3 +738,16 @@ class CashReportView(APIView):
             'total_cash_out': total_out,
             'net': total_in - total_out
         })
+
+
+class FeeConfigurationViewSet(viewsets.ModelViewSet):
+    serializer_class = FeeConfigurationSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['label']
+    filterset_fields = ['site', 'program', 'level', 'academic_year', 'is_active']
+    ordering_fields = ['created_at', 'site', 'level']
+
+    def get_queryset(self):
+        return FeeConfiguration.objects.select_related(
+            'site', 'program', 'level', 'academic_year'
+        ).all()

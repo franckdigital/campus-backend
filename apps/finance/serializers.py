@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from .models import (
     FeeType, Invoice, InvoiceItem, PaymentMethod, Payment,
-    CashRegister, CashSession, CashTransaction, BankAccount, Expense
+    CashRegister, CashSession, CashTransaction, BankAccount, Expense,
+    FeeConfiguration
 )
 
 
@@ -197,3 +198,20 @@ class CashPaymentSerializer(serializers.Serializer):
     cash_session_id = serializers.UUIDField()
     reference = serializers.CharField(required=False, allow_blank=True)
     notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class FeeConfigurationSerializer(serializers.ModelSerializer):
+    site_name = serializers.CharField(source='site.name', read_only=True)
+    program_name = serializers.CharField(source='program.name', read_only=True)
+    level_name = serializers.CharField(source='level.name', read_only=True)
+    academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
+
+    class Meta:
+        model = FeeConfiguration
+        fields = [
+            'id', 'site', 'site_name', 'program', 'program_name',
+            'level', 'level_name', 'academic_year', 'academic_year_name',
+            'registration_fee', 'tuition_fee', 'label', 'is_active',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']

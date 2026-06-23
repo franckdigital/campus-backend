@@ -528,3 +528,64 @@ def create_enrollment_on_registration_invoice(sender, instance, created, **kwarg
         print(f"✅ Enrollment auto-created for student {instance.student.matricule} in class {class_obj.name}")
     else:
         print(f"⚠️ No class found for student {instance.student.matricule} - enrollment not created")
+
+
+class FeeConfiguration(BaseModel):
+    """Barème des frais de scolarité et d'inscription par site / filière / niveau / année."""
+    site = models.ForeignKey(
+        Site, on_delete=models.CASCADE, related_name='fee_configurations',
+        null=True, blank=True, verbose_name="Site"
+    )
+    program = models.ForeignKey(
+        'academic.Program', on_delete=models.CASCADE, related_name='fee_configurations',
+        null=True, blank=True, verbose_name="Filière"
+    )
+    level = models.ForeignKey(
+        'academic.Level', on_delete=models.CASCADE, related_name='fee_configurations',
+        null=True, blank=True, verbose_name="Niveau"
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear, on_delete=models.CASCADE, related_name='fee_configurations',
+        null=True, blank=True, verbose_name="Année académique"
+    )
+    registration_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais d'inscription")
+    tuition_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais de scolarité")
+    label = models.CharField(max_length=200, blank=True, verbose_name="Libellé")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'fee_configurations'
+        verbose_name = "Configuration des frais"
+        verbose_name_plural = "Configurations des frais"
+        ordering = ['site', 'program', 'level']
+
+    def __str__(self):
+        parts = [self.site.name if self.site else 'Tous sites',
+                 self.program.name if self.program else 'Toutes filières',
+                 self.level.name if self.level else 'Tous niveaux']
+        return ' / '.join(parts)
+
+    @classmethod
+    def get_for_enrollment(cls, site, level, academic_year=None):
+        """Return the best-matching fee config for a given site + level."""
+        qs = cls.objects.filter(is_active=True)
+        # Most specific: site + level + year
+        if academic_year:
+            cfg = qs.filter(site=site, level=level, academic_year=academic_year).first()
+            if cfg:
+                return cfg
+        # site + level (any year)
+        cfg = qs.filter(site=site, level=level, academic_year=None).first()
+        if cfg:
+            return cfg
+        # site + program
+        if level and level.program_id:
+            cfg = qs.filter(site=site, program_id=level.program_id, level=None).first()
+            if cfg:
+                return cfg
+        # site only
+        cfg = qs.filter(site=site, level=None, program=None).first()
+        if cfg:
+            return cfg
+        # global fallback
+        return qs.filter(site=None, level=None, program=None).first()
