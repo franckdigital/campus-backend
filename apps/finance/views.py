@@ -741,13 +741,25 @@ class CashReportView(APIView):
 
 
 class FeeConfigurationViewSet(viewsets.ModelViewSet):
+    queryset = FeeConfiguration.objects.all()
     serializer_class = FeeConfigurationSerializer
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['label']
-    filterset_fields = ['site', 'program', 'level', 'academic_year', 'is_active']
-    ordering_fields = ['created_at', 'site', 'level']
+    ordering_fields = ['created_at', 'label']
 
     def get_queryset(self):
-        return FeeConfiguration.objects.select_related(
+        qs = FeeConfiguration.objects.select_related(
             'site', 'program', 'level', 'academic_year'
-        ).all()
+        )
+        p = self.request.query_params
+        if p.get('site'):
+            qs = qs.filter(site_id=p['site'].replace('-', ''))
+        if p.get('program'):
+            qs = qs.filter(program_id=p['program'].replace('-', ''))
+        if p.get('level'):
+            qs = qs.filter(level_id=p['level'].replace('-', ''))
+        if p.get('academic_year'):
+            qs = qs.filter(academic_year_id=p['academic_year'].replace('-', ''))
+        if p.get('is_active') is not None and p.get('is_active') != '':
+            qs = qs.filter(is_active=p['is_active'].lower() in ('true', '1', 'yes'))
+        return qs
