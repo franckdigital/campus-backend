@@ -201,10 +201,22 @@ class CashPaymentSerializer(serializers.Serializer):
 
 
 class FeeConfigurationSerializer(serializers.ModelSerializer):
-    site_name = serializers.CharField(source='site.name', read_only=True)
-    program_name = serializers.CharField(source='program.name', read_only=True)
-    level_name = serializers.CharField(source='level.name', read_only=True)
-    academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
+    site_name = serializers.SerializerMethodField()
+    program_name = serializers.SerializerMethodField()
+    level_name = serializers.SerializerMethodField()
+    academic_year_name = serializers.SerializerMethodField()
+
+    def get_site_name(self, obj):
+        return obj.site.name if obj.site_id and obj.site else None
+
+    def get_program_name(self, obj):
+        return obj.program.name if obj.program_id and obj.program else None
+
+    def get_level_name(self, obj):
+        return obj.level.name if obj.level_id and obj.level else None
+
+    def get_academic_year_name(self, obj):
+        return obj.academic_year.name if obj.academic_year_id and obj.academic_year else None
 
     class Meta:
         model = FeeConfiguration
