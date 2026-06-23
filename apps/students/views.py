@@ -319,7 +319,13 @@ class StudentViewSet(viewsets.ModelViewSet):
                 configured_tuition = float(fee_config.tuition_fee)
                 configured_registration = float(fee_config.registration_fee)
             else:
-                logger.info('financial_summary: no fee config for site=%s level=%s year=%s', student.site_id, level, academic_year)
+                level_id = str(level.id) if level else None
+                year_id = str(academic_year.id) if academic_year else None
+                logger.info(
+                    'financial_summary: no fee config | site_id=%s | level_id=%s (%s) | year_id=%s (%s) | all_configs=%s',
+                    student.site_id, level_id, level, year_id, academic_year,
+                    list(FeeConfiguration.objects.filter(is_active=True).values('id', 'site_id', 'level_id', 'academic_year_id', 'registration_fee', 'tuition_fee'))
+                )
         except Exception as e:
             logger.error('financial_summary: unexpected error: %s', e, exc_info=True)
 
