@@ -285,24 +285,43 @@ class StudentViewSet(viewsets.ModelViewSet):
         remaining = max(0.0, total_tuition - total_paid)
 
         # Look up FeeConfiguration — try enrollment level first, fall back to site-only
+        import logging
+        logger = logging.getLogger(__name__)
         configured_tuition = float(student.tuition_fee or 0)
         configured_registration = float(student.registration_fee or 0)
         try:
-            enrollment = student.enrollments.filter(
+            # Use values_list to avoid cross-table JOINs (collation-safe)
+            enrollment_row = student.enrollments.filter(
                 is_active=True
-            ).select_related('class_obj__level', 'academic_year').order_by('-created_at').first()
+            ).order_by('-created_at').values_list(
+                'class_obj_id', 'academic_year_id'
+            ).first()
             level = None
             academic_year = None
-            if enrollment:
-                level = enrollment.class_obj.level if enrollment.class_obj else None
-                academic_year = enrollment.academic_year
+            if enrollment_row:
+                class_obj_id, academic_year_id = enrollment_row
+                if class_obj_id:
+                    from apps.academic.models import Class as AcademicClass, AcademicYear
+                    try:
+                        class_obj = AcademicClass.objects.select_related('level').get(pk=class_obj_id)
+                        level = class_obj.level
+                    except Exception as e:
+                        logger.warning('financial_summary: cannot load class %s: %s', class_obj_id, e)
+                if academic_year_id:
+                    from apps.core.models import AcademicYear
+                    try:
+                        academic_year = AcademicYear.objects.get(pk=academic_year_id)
+                    except Exception as e:
+                        logger.warning('financial_summary: cannot load academic_year %s: %s', academic_year_id, e)
             # Always attempt lookup — get_for_enrollment falls back to site-only when level=None
             fee_config = FeeConfiguration.get_for_enrollment(student.site, level, academic_year)
             if fee_config:
                 configured_tuition = float(fee_config.tuition_fee)
                 configured_registration = float(fee_config.registration_fee)
-        except Exception:
-            pass
+            else:
+                logger.info('financial_summary: no fee config for site=%s level=%s year=%s', student.site_id, level, academic_year)
+        except Exception as e:
+            logger.error('financial_summary: unexpected error: %s', e, exc_info=True)
 
         return Response({
             'tuition_fee':              total_tuition or configured_tuition,
