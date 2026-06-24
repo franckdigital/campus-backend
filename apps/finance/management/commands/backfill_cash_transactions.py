@@ -106,9 +106,10 @@ class Command(BaseCommand):
         )
 
         if not dry_run and count > 0:
+            from decimal import Decimal
             # Update cash register balance
             session.cash_register.current_balance = (
-                session.cash_register.current_balance + total_amount
+                session.cash_register.current_balance + Decimal(str(total_amount))
             )
             session.cash_register.save(update_fields=['current_balance'])
             self.stdout.write(
