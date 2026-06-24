@@ -63,7 +63,7 @@ class Command(BaseCommand):
 
         for p in payments:
             inv = p.invoice
-            inv_text = f"{inv.notes or ''} {inv.description or ''}".lower()
+            inv_text = (inv.notes or '').lower()
 
             is_inscription = 'inscription' in inv_text or inv.items.filter(
                 Q(description__icontains='inscription') |

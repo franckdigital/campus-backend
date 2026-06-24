@@ -90,7 +90,7 @@ def on_payment_save(sender, instance, created, **kwargs):
         # Build a human-readable description from the invoice
         from django.db.models import Q
         inv = instance.invoice
-        inv_text = f"{inv.notes or ''} {inv.description or ''}".lower()
+        inv_text = (inv.notes or '').lower()
         is_inscription = 'inscription' in inv_text or inv.items.filter(
             Q(description__icontains='inscription') |
             Q(fee_type__name__icontains='inscription') |
