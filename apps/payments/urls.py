@@ -2,7 +2,8 @@ from django.urls import path, include
 from rest_framework.routers import SimpleRouter as DefaultRouter
 from .views import (
     CinetPayConfigViewSet, CinetPayTransactionViewSet,
-    CinetPayInitiateView, CinetPayCallbackView, CinetPayStatusView
+    CinetPayInitiateView, CinetPayCallbackView, CinetPayStatusView,
+    CinetPaySandboxSuccessView
 )
 
 router = DefaultRouter()
@@ -12,6 +13,7 @@ router.register(r'cinetpay-transactions', CinetPayTransactionViewSet, basename='
 urlpatterns = [
     path('payments/cinetpay/initiate/', CinetPayInitiateView.as_view(), name='cinetpay-initiate'),
     path('payments/cinetpay/callback/', CinetPayCallbackView.as_view(), name='cinetpay-callback'),
+    path('payments/cinetpay/sandbox-success/', CinetPaySandboxSuccessView.as_view(), name='cinetpay-sandbox-success'),
     path('payments/cinetpay/<str:transaction_id>/status/', CinetPayStatusView.as_view(), name='cinetpay-status'),
     path('', include(router.urls)),
 ]

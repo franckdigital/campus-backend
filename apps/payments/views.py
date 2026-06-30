@@ -136,11 +136,97 @@ class CinetPayStatusView(APIView):
                 {'detail': 'Transaction non trouvée'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
+        # Sandbox local : transaction déjà marquée SUCCESS par sandbox-success
+        if transaction.status == 'SUCCESS':
+            return Response({
+                'transaction': CinetPayTransactionSerializer(transaction).data,
+            })
+
         service = CinetPayService(transaction.invoice.site)
         verification = service.verify_payment(transaction_id)
-        
+
         return Response({
             'transaction': CinetPayTransactionSerializer(transaction).data,
             'verification': verification
         })
+
+
+class CinetPaySandboxSuccessView(APIView):
+    """
+    Vue de test sandbox : simule un paiement réussi sans passer par CinetPay.
+    Activée uniquement quand CINETPAY_LOCAL_SANDBOX=True.
+    Ouverte dans le navigateur in-app → valide la transaction → retourne une page HTML.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        from django.conf import settings
+        from django.http import HttpResponse
+        from apps.finance.models import Payment, PaymentMethod
+        from django.utils import timezone
+
+        if not getattr(settings, 'CINETPAY_LOCAL_SANDBOX', False):
+            return HttpResponse('Sandbox désactivé.', status=403)
+
+        transaction_id = request.GET.get('transaction_id', '')
+        try:
+            transaction = CinetPayTransaction.objects.select_related(
+                'invoice__student__user'
+            ).get(transaction_id=transaction_id)
+        except CinetPayTransaction.DoesNotExist:
+            return HttpResponse('Transaction introuvable.', status=404)
+
+        if transaction.status != 'SUCCESS':
+            # Créer le Payment et valider la facture
+            cinetpay_method, _ = PaymentMethod.objects.get_or_create(
+                code='CINETPAY',
+                defaults={'name': 'CinetPay Mobile Money', 'is_online': True}
+            )
+            payment = Payment.objects.create(
+                invoice=transaction.invoice,
+                payment_method=cinetpay_method,
+                amount=transaction.amount,
+                status='SUCCESS',
+                reference=transaction.transaction_id,
+                notes='Paiement sandbox (test)',
+                validated_at=timezone.now()
+            )
+            transaction.status = 'SUCCESS'
+            transaction.payment = payment
+            transaction.completed_at = timezone.now()
+            transaction.save()
+            transaction.invoice.add_payment(transaction.amount)
+
+        student = transaction.invoice.student.user
+        html = f"""<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Paiement test réussi</title>
+<style>
+  body{{font-family:sans-serif;display:flex;align-items:center;justify-content:center;
+        min-height:100vh;margin:0;background:#F0FDF4;}}
+  .card{{background:#fff;border-radius:16px;padding:40px;text-align:center;
+         box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:360px;width:90%;}}
+  .icon{{font-size:56px;margin-bottom:16px;}}
+  h1{{color:#065F46;margin:0 0 8px;font-size:22px;}}
+  p{{color:#6B7280;margin:0 0 6px;font-size:14px;}}
+  .amount{{color:#059669;font-size:28px;font-weight:800;margin:16px 0;}}
+  .badge{{display:inline-block;background:#D1FAE5;color:#065F46;
+           border-radius:20px;padding:4px 14px;font-size:12px;font-weight:700;}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">✅</div>
+  <h1>Paiement test réussi</h1>
+  <p>{student.first_name} {student.last_name}</p>
+  <div class="amount">{int(transaction.amount):,} F CFA</div>
+  <div class="badge">SANDBOX — Test uniquement</div>
+  <p style="margin-top:20px;font-size:12px;color:#9CA3AF;">
+    Fermez cette fenêtre pour retourner à l'application.
+  </p>
+</div>
+</body>
+</html>"""
+        return HttpResponse(html)

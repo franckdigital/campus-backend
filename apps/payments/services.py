@@ -37,8 +37,26 @@ class CinetPayService:
     
     def initiate_payment(self, transaction):
         """Initiate a payment with CinetPay."""
+
+        # ── Sandbox local (test sans connexion CinetPay) ──────────────────
+        if getattr(settings, 'CINETPAY_LOCAL_SANDBOX', False):
+            frontend = getattr(settings, 'FRONTEND_URL', 'https://api-campus.numerix.digital')
+            mock_url = (
+                f"{frontend}/api/v1/payments/cinetpay/sandbox-success/"
+                f"?transaction_id={transaction.transaction_id}"
+            )
+            transaction.payment_url = mock_url
+            transaction.cinetpay_transaction_id = f"SANDBOX-{transaction.transaction_id}"
+            transaction.save()
+            return {
+                'success': True,
+                'payment_url': mock_url,
+                'transaction_id': transaction.transaction_id,
+            }
+        # ─────────────────────────────────────────────────────────────────
+
         url = f"{self.BASE_URL}/payment"
-        
+
         payload = {
             'apikey': self.api_key,
             'site_id': self.site_id,
@@ -55,11 +73,11 @@ class CinetPayService:
             'customer_email': transaction.invoice.student.user.email,
             'customer_phone_number': transaction.invoice.student.user.phone or '',
         }
-        
+
         try:
             response = requests.post(url, json=payload, timeout=30)
             data = response.json()
-            
+
             if data.get('code') == '201':
                 transaction.payment_url = data['data']['payment_url']
                 transaction.cinetpay_transaction_id = data['data'].get('payment_token', '')

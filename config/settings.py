@@ -219,6 +219,7 @@ CINETPAY_SITE_ID = config('CINETPAY_SITE_ID', default='')
 CINETPAY_SECRET_KEY = config('CINETPAY_SECRET_KEY', default='')
 CINETPAY_NOTIFY_URL = config('CINETPAY_NOTIFY_URL', default='')
 CINETPAY_BASE_URL = config('CINETPAY_BASE_URL', default='https://api-checkout.cinetpay.net/v2')
+CINETPAY_LOCAL_SANDBOX = config('CINETPAY_LOCAL_SANDBOX', default=False, cast=bool)
 
 # Zoom Configuration
 ZOOM_API_KEY = config('ZOOM_API_KEY', default='')
