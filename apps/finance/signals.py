@@ -26,11 +26,19 @@ def _get_or_create_open_session(site, payment_method=None):
 
     cash_register = None
     if is_online:
+        from django.db.models import Q
         cash_register = (
             CashRegister.objects
             .filter(site=site, is_active=True)
-            .filter(code__iregex=r'mobile|mm|cinetpay')
+            .filter(
+                Q(code__iregex=r'mobile|mm|cinetpay|wave|momo') |
+                Q(name__iregex=r'mobile|cinetpay|wave|momo')
+            )
             .first()
+        )
+        logger.info(
+            "_get_or_create_open_session: site=%s is_online=True → register=%s",
+            site, cash_register.name if cash_register else 'NONE',
         )
     if not cash_register:
         # Fallback: first active register for this site
