@@ -493,6 +493,9 @@ class CashTransactionViewSet(viewsets.ModelViewSet):
         site = self.request.query_params.get('site')
         if site:
             qs = qs.filter(session__cash_register__site_id=site)
+        cash_register = self.request.query_params.get('cash_register')
+        if cash_register:
+            qs = qs.filter(session__cash_register_id=cash_register)
         month = self.request.query_params.get('month')  # YYYY-MM
         year = self.request.query_params.get('year')    # YYYY
         if month:

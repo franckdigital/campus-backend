@@ -92,17 +92,22 @@ class InvoiceListSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.user.full_name', read_only=True)
     student_matricule = serializers.CharField(source='student.matricule', read_only=True)
     has_payment_proof = serializers.SerializerMethodField()
+    last_payment_method = serializers.SerializerMethodField()
 
     class Meta:
         model = Invoice
         fields = [
             'id', 'invoice_number', 'student', 'student_name', 'student_matricule',
             'issue_date', 'due_date', 'total', 'amount_paid', 'balance', 'status',
-            'has_payment_proof'
+            'has_payment_proof', 'last_payment_method'
         ]
 
     def get_has_payment_proof(self, obj):
         return obj.payments.filter(proof__isnull=False).exclude(proof='').exists()
+
+    def get_last_payment_method(self, obj):
+        last_payment = obj.payments.filter(status='SUCCESS').order_by('-payment_date').first()
+        return last_payment.payment_method.name if last_payment else None
 
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
