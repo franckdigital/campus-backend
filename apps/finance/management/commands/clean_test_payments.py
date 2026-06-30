@@ -38,10 +38,13 @@ class Command(BaseCommand):
         if options['payment_numbers']:
             payments = Payment.objects.filter(payment_number__in=options['payment_numbers'])
         elif options['student']:
-            payments = Payment.objects.filter(invoice__student__matricule=options['student'])
+            # Accept matricule or student ID
+            if options['student'].isdigit():
+                payments = Payment.objects.filter(invoice__student_id=options['student'])
+            else:
+                payments = Payment.objects.filter(invoice__student__matricule=options['student'])
         else:
-            # Default: delete all payments for elearning test students
-            # seeded by seed_demo_complet (el1–el5 students, PAY-TEST-001–005)
+            # Default: delete ALL payments for elearning students (any matricule starting EL-)
             payments = Payment.objects.filter(
                 invoice__student__matricule__startswith='EL-'
             )

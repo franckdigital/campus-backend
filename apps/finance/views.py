@@ -179,14 +179,20 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
 
 class PaymentViewSet(viewsets.ModelViewSet):
-    queryset = Payment.objects.select_related(
-        'invoice__student__user', 'payment_method', 'received_by', 'validated_by'
-    ).all()
     serializer_class = PaymentSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['payment_number', 'reference', 'invoice__invoice_number']
     ordering_fields = ['payment_date', 'amount', 'status']
     filterset_fields = ['invoice', 'payment_method', 'status', 'is_active']
+
+    def get_queryset(self):
+        qs = Payment.objects.select_related(
+            'invoice__student__user', 'payment_method', 'received_by', 'validated_by'
+        )
+        student = self.request.query_params.get('student')
+        if student:
+            qs = qs.filter(invoice__student_id=student)
+        return qs
 
     def perform_create(self, serializer):
         payment = serializer.save(received_by=self.request.user)
