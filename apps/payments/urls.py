@@ -3,7 +3,7 @@ from rest_framework.routers import SimpleRouter as DefaultRouter
 from .views import (
     CinetPayConfigViewSet, CinetPayTransactionViewSet,
     CinetPayInitiateView, CinetPayCallbackView, CinetPayStatusView,
-    CinetPaySandboxSuccessView
+    CinetPaySandboxSuccessView, CinetPayDemoPayView,
 )
 
 router = DefaultRouter()
@@ -14,6 +14,7 @@ urlpatterns = [
     path('payments/cinetpay/initiate/', CinetPayInitiateView.as_view(), name='cinetpay-initiate'),
     path('payments/cinetpay/callback/', CinetPayCallbackView.as_view(), name='cinetpay-callback'),
     path('payments/cinetpay/sandbox-success/', CinetPaySandboxSuccessView.as_view(), name='cinetpay-sandbox-success'),
+    path('payments/cinetpay/demo-pay/',        CinetPayDemoPayView.as_view(),        name='cinetpay-demo-pay'),
     path('payments/cinetpay/<str:transaction_id>/status/', CinetPayStatusView.as_view(), name='cinetpay-status'),
     path('', include(router.urls)),
 ]

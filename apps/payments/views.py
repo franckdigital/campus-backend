@@ -83,8 +83,9 @@ class CinetPayInitiateView(APIView):
                 'currency': transaction.currency
             }, status=status.HTTP_201_CREATED)
         else:
+            # Include transaction_id so the mobile can use demo-pay even when DNS fails
             return Response(
-                {'detail': result['error']},
+                {'detail': result['error'], 'transaction_id': transaction.transaction_id},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -230,3 +231,66 @@ class CinetPaySandboxSuccessView(APIView):
 </body>
 </html>"""
         return HttpResponse(html)
+
+
+class CinetPayDemoPayView(APIView):
+    """
+    Endpoint de paiement démo (authentifié).
+    Utilisé quand CinetPay est inaccessible : crée un vrai Payment en base
+    à partir d'une transaction déjà initiée (status=FAILED).
+    Sécurisé : vérifie que la transaction appartient à l'utilisateur connecté.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from apps.finance.models import Payment, PaymentMethod
+        from django.utils import timezone
+
+        transaction_id = request.data.get('transaction_id', '').strip()
+        if not transaction_id:
+            return Response({'detail': 'transaction_id requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = CinetPayTransaction.objects.select_related(
+                'invoice__student__user'
+            ).get(transaction_id=transaction_id)
+        except CinetPayTransaction.DoesNotExist:
+            return Response({'detail': 'Transaction introuvable'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Sécurité : seul l'étudiant propriétaire peut valider
+        if transaction.invoice.student.user_id != request.user.id:
+            return Response({'detail': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
+
+        if transaction.status == 'SUCCESS':
+            return Response({
+                'success': True,
+                'already_paid': True,
+                'amount': str(transaction.amount),
+                'invoice_number': transaction.invoice.invoice_number,
+            })
+
+        demo_method, _ = PaymentMethod.objects.get_or_create(
+            code='CINETPAY_DEMO',
+            defaults={'name': 'CinetPay (Test)', 'is_online': True}
+        )
+        payment = Payment.objects.create(
+            invoice=transaction.invoice,
+            payment_method=demo_method,
+            amount=transaction.amount,
+            status='SUCCESS',
+            reference=f"DEMO-{transaction.transaction_id}",
+            notes='Paiement test (CinetPay temporairement inaccessible)',
+            validated_at=timezone.now(),
+        )
+        transaction.status = 'SUCCESS'
+        transaction.payment = payment
+        transaction.completed_at = timezone.now()
+        transaction.save()
+        transaction.invoice.add_payment(transaction.amount)
+
+        return Response({
+            'success': True,
+            'already_paid': False,
+            'amount': str(transaction.amount),
+            'invoice_number': transaction.invoice.invoice_number,
+        })
