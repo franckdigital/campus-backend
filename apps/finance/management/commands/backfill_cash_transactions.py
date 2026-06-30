@@ -1,13 +1,12 @@
 """
-Management command to backfill CashTransaction records for existing SUCCESS payments.
+Backfill CashTransaction records for existing SUCCESS payments that have none.
 
 Usage:
     python manage.py backfill_cash_transactions
     python manage.py backfill_cash_transactions --dry-run
-    python manage.py backfill_cash_transactions --session-id <uuid>
 """
+from decimal import Decimal
 from django.core.management.base import BaseCommand
-from django.db.models import Q
 
 
 class Command(BaseCommand):
@@ -15,74 +14,54 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--dry-run', action='store_true', help='Preview without saving')
-        parser.add_argument('--session-id', type=str, help='Force a specific CashSession UUID')
 
     def handle(self, *args, **options):
-        from apps.finance.models import Payment, CashSession, CashTransaction
+        from apps.finance.models import Payment, CashTransaction
+        from apps.finance.signals import _get_or_create_open_session
 
         dry_run = options['dry_run']
 
-        # Find the session to use
-        if options.get('session_id'):
-            try:
-                session = CashSession.objects.get(id=options['session_id'])
-            except CashSession.DoesNotExist:
-                self.stderr.write(f"Session {options['session_id']} not found.")
-                return
-        else:
-            session = (
-                CashSession.objects
-                .filter(status='OPEN', is_active=True)
-                .order_by('-opened_at')
-                .first()
-            )
-            if not session:
-                self.stderr.write(
-                    "No open session found. Open a session first or pass --session-id."
-                )
-                return
-
-        self.stdout.write(f"Using session: {session} (id={session.id})")
-
-        # All SUCCESS payments without a cash transaction
         payments = (
             Payment.objects
             .filter(status='SUCCESS', is_active=True)
             .filter(cash_transactions__isnull=True)
-            .select_related('invoice__student__user', 'invoice')
+            .select_related('invoice__student__user', 'invoice__site', 'payment_method')
             .order_by('created_at')
         )
 
-        self.stdout.write(f"Payments to backfill: {payments.count()}")
-
+        total = payments.count()
+        self.stdout.write(f"Payments to backfill: {total}")
         if dry_run:
-            self.stdout.write("[DRY-RUN] No records will be created.")
+            self.stdout.write("[DRY-RUN] No records will be created.\n")
 
         count = 0
-        total_amount = 0
+        amount_sum = Decimal('0')
+        skipped = 0
 
         for p in payments:
             inv = p.invoice
-            inv_text = (inv.notes or '').lower()
+            site = getattr(inv, 'site', None) or getattr(inv.student, 'site', None)
 
-            is_inscription = 'inscription' in inv_text or inv.items.filter(
-                Q(description__icontains='inscription') |
-                Q(fee_type__name__icontains='inscription') |
-                Q(fee_type__code__icontains='REGISTRATION')
-            ).exists()
+            if not dry_run:
+                session = _get_or_create_open_session(site, payment_method=p.payment_method)
+                if not session:
+                    self.stderr.write(f"  SKIP  no cash register for site {site} — payment {p.id}")
+                    skipped += 1
+                    continue
 
+            is_inscription = inv.items.filter(fee_type__code__iregex=r'inscri|reg').exists()
             fee_label = "Frais d'inscription" if is_inscription else "Frais de scolarité"
             try:
                 student_name = inv.student.user.get_full_name() or str(inv.student)
             except Exception:
-                student_name = str(inv.student_id)
+                student_name = ''
 
             description = f"{fee_label} — {student_name} (facture {inv.invoice_number})"
             ref_date = p.created_at.strftime('%Y%m%d') if p.created_at else '00000000'
             reference = f"PAY-{ref_date}-{str(p.id)[:8].upper()}"
 
             self.stdout.write(
-                f"  {'[DRY] ' if dry_run else ''}{p.amount} FCFA — {description}"
+                f"  {'[DRY] ' if dry_run else ''}+{p.amount} FCFA — {description}"
             )
 
             if not dry_run:
@@ -94,27 +73,16 @@ class Command(BaseCommand):
                     description=description,
                     reference=reference,
                 )
+                session.cash_register.current_balance += p.amount
+                session.cash_register.save(update_fields=['current_balance'])
 
             count += 1
-            total_amount += float(p.amount)
+            amount_sum += p.amount
 
-        action = "Would create" if dry_run else "Created"
+        verb = "Would create" if dry_run else "Created"
         self.stdout.write(
             self.style.SUCCESS(
-                f"\n{action} {count} transactions — Total: {total_amount:,.0f} FCFA"
+                f"\n{verb} {count} transaction(s) — {float(amount_sum):,.0f} FCFA"
+                + (f" | {skipped} skipped (no register)" if skipped else "")
             )
         )
-
-        if not dry_run and count > 0:
-            from decimal import Decimal
-            # Update cash register balance
-            session.cash_register.current_balance = (
-                session.cash_register.current_balance + Decimal(str(total_amount))
-            )
-            session.cash_register.save(update_fields=['current_balance'])
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"Cash register balance updated: "
-                    f"{float(session.cash_register.current_balance):,.0f} FCFA"
-                )
-            )

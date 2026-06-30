@@ -202,61 +202,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     def _maybe_create_cash_transaction(self, payment):
         """
-        Si le mode de paiement est espèces et qu'une session de caisse est ouverte
-        pour le site de la facture, enregistre automatiquement la transaction.
+        Tous les paiements SUCCESS alimentent la caisse automatiquement.
+        Délègue à on_payment_save (signal) qui gère la session auto-création.
+        On ne fait rien ici pour éviter les doublons — le signal s'en charge.
         """
-        try:
-            method = payment.payment_method
-            if not method:
-                return
-            # Seuls les paiements en espèces physiques alimentent la caisse
-            cash_codes = {'CASH', 'ESPECES', 'ESPECE', 'LIQUID', 'LIQUIDE'}
-            if method.code.upper() not in cash_codes:
-                return
-
-            site = payment.invoice.site if payment.invoice else None
-
-            # Cherche d'abord une session sur le site de la facture,
-            # puis sur n'importe quel site si aucune n'est trouvée
-            open_session = None
-            if site:
-                open_session = CashSession.objects.filter(
-                    cash_register__site=site,
-                    status='OPEN',
-                    is_active=True,
-                ).select_related('cash_register').first()
-            if not open_session:
-                open_session = CashSession.objects.filter(
-                    status='OPEN',
-                    is_active=True,
-                ).select_related('cash_register').first()
-            if not open_session:
-                return  # pas de session ouverte → on ne force rien
-
-            # Éviter les doublons si un CashTransaction lié à ce paiement existe déjà
-            if CashTransaction.objects.filter(payment=payment).exists():
-                return
-
-            student_name = ''
-            try:
-                u = payment.invoice.student.user
-                student_name = getattr(u, 'full_name', None) or u.get_full_name() or ''
-            except Exception:
-                pass
-
-            CashTransaction.objects.create(
-                session=open_session,
-                payment=payment,
-                transaction_type='IN',
-                amount=payment.amount,
-                description=f"Paiement {payment.invoice.invoice_number}"
-                            + (f" – {student_name}" if student_name else ""),
-                reference=payment.payment_number,
-                recorded_by=self.request.user,
-                is_active=True,
-            )
-        except Exception:
-            pass  # ne jamais bloquer l'enregistrement du paiement
+        pass  # handled by apps.finance.signals.on_payment_save
 
     def perform_update(self, serializer):
         from decimal import Decimal
