@@ -443,8 +443,12 @@ class StudentViewSet(viewsets.ModelViewSet):
                         quantity=1, unit_price=int(tuition_amount)
                     )
                     inv.save()  # recalculate totals after items
+                    # First save set status='PAID' (balance=0, no items) — fix it
+                    if inv.balance > 0 and inv.status == 'PAID':
+                        Invoice.objects.filter(pk=inv.pk).update(status='DRAFT')
+                        inv.status = 'DRAFT'
                     created += 1
-                    logger.info('prepare_invoices: created tuition invoice %s', inv.invoice_number)
+                    logger.info('prepare_invoices: created tuition invoice %s status=%s total=%s', inv.invoice_number, inv.status, inv.total)
 
             # Inscription invoice (only if not already paid)
             if reg_amount > 0 and not student.registration_fee_paid:
@@ -461,8 +465,11 @@ class StudentViewSet(viewsets.ModelViewSet):
                         quantity=1, unit_price=int(reg_amount)
                     )
                     inv.save()  # recalculate totals after items
+                    if inv.balance > 0 and inv.status == 'PAID':
+                        Invoice.objects.filter(pk=inv.pk).update(status='DRAFT')
+                        inv.status = 'DRAFT'
                     created += 1
-                    logger.info('prepare_invoices: created registration invoice %s', inv.invoice_number)
+                    logger.info('prepare_invoices: created registration invoice %s status=%s total=%s', inv.invoice_number, inv.status, inv.total)
 
             all_invoices = Invoice.objects.filter(
                 student=student, is_active=True
