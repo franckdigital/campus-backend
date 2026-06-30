@@ -6,14 +6,34 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 
 from .models import (
-    ZoomMeeting, Lesson, LessonAttachment,
-    Assignment, AssignmentSubmission, AssignmentCorrection
+    ZoomMeeting, Lesson, LessonAttachment, Chapter, LessonProgress,
+    Quiz, Question, Choice, QuizAttempt, AttemptAnswer,
+    Assignment, AssignmentSubmission, AssignmentCorrection,
+    LibraryDocument, DocumentFavorite, ReadingProgress,
+    SecureExam, ExamSession,
+    VirtualLab, LabSubmission,
+    AIConversation, AIMessage,
+    VideoLibrary, VideoSubtitle, VideoProgress, VideoDownloadToken,
+    VirtualClassroom, ClassroomPoll, PollResponse, ClassroomChatMessage, HandRaise,
+    ExamSnapshot,
 )
 from .serializers import (
     ZoomMeetingSerializer, LessonSerializer, LessonListSerializer,
-    LessonAttachmentSerializer, AssignmentSerializer, AssignmentListSerializer,
+    LessonAttachmentSerializer, ChapterSerializer, LessonProgressSerializer,
+    QuizSerializer, QuizListSerializer, QuizTakeSerializer,
+    QuestionSerializer, ChoiceSerializer,
+    AttemptAnswerSubmitSerializer, QuizAttemptSerializer,
+    AssignmentSerializer, AssignmentListSerializer,
     AssignmentSubmissionSerializer, AssignmentCorrectionSerializer,
-    CreateZoomMeetingSerializer
+    CreateZoomMeetingSerializer,
+    LibraryDocumentSerializer, DocumentFavoriteSerializer, ReadingProgressSerializer,
+    SecureExamSerializer, ExamSessionSerializer,
+    VirtualLabSerializer, LabSubmissionSerializer,
+    AIConversationSerializer, AIConversationListSerializer, AIMessageSerializer,
+    AISendMessageSerializer, AIGenerateSerializer, AIGradeSubmissionSerializer,
+    VideoLibrarySerializer, VideoSubtitleSerializer, VideoProgressSerializer,
+    VirtualClassroomSerializer, ClassroomPollSerializer, PollResponseSerializer,
+    ClassroomChatMessageSerializer, HandRaiseSerializer, AITranscriptSerializer,
 )
 from .services import ZoomService
 from apps.academic.models import Session
@@ -78,12 +98,12 @@ class CreateZoomMeetingView(APIView):
 
 class LessonViewSet(viewsets.ModelViewSet):
     queryset = Lesson.objects.select_related(
-        'class_obj', 'subject', 'teacher__user', 'zoom_meeting'
+        'class_obj', 'subject', 'teacher__user', 'chapter', 'zoom_meeting'
     ).prefetch_related('attachments').all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title', 'description']
     ordering_fields = ['order', 'created_at', 'published_at']
-    filterset_fields = ['class_obj', 'subject', 'teacher', 'is_published', 'is_active']
+    filterset_fields = ['class_obj', 'subject', 'teacher', 'chapter', 'is_published', 'is_active']
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -94,7 +114,7 @@ class LessonViewSet(viewsets.ModelViewSet):
     def publish(self, request, pk=None):
         lesson = self.get_object()
         lesson.publish()
-        return Response(LessonSerializer(lesson).data)
+        return Response(LessonSerializer(lesson, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], url_path='add-attachment')
     def add_attachment(self, request, pk=None):
@@ -102,14 +122,476 @@ class LessonViewSet(viewsets.ModelViewSet):
         serializer = LessonAttachmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save(lesson=lesson)
-        return Response(LessonSerializer(lesson).data)
+        return Response(LessonSerializer(lesson, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='track-progress')
+    def track_progress(self, request, pk=None):
+        """Student reports viewing progress on a lesson; re-evaluates completion gates."""
+        lesson = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not lesson.is_unlocked_for(student):
+            return Response({'detail': 'Cette leçon est verrouillée'}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.utils import timezone
+        progress, created = LessonProgress.objects.get_or_create(
+            student=student, lesson=lesson,
+            defaults={'started_at': timezone.now()}
+        )
+        if created or not progress.started_at:
+            progress.started_at = timezone.now()
+
+        watch_percent = request.data.get('watch_percent')
+        time_spent_seconds = request.data.get('time_spent_seconds')
+        if watch_percent is not None:
+            progress.watch_percent = max(progress.watch_percent, min(100, int(watch_percent)))
+        if time_spent_seconds is not None:
+            progress.time_spent_seconds = max(progress.time_spent_seconds, int(time_spent_seconds))
+        progress.save()
+        progress.evaluate_completion()
+
+        return Response(LessonProgressSerializer(progress).data)
+
+    @action(detail=False, methods=['get'], url_path='progress-overview')
+    def progress_overview(self, request):
+        """Lots 7 & 10 — Admin view: per-lesson completion stats for a class+subject."""
+        class_id   = request.query_params.get('class_obj')
+        subject_id = request.query_params.get('subject')
+        if not class_id or not subject_id:
+            return Response({'detail': 'class_obj et subject requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.students.models import Student
+        lessons = Lesson.objects.filter(
+            class_obj_id=class_id, subject_id=subject_id, is_active=True, is_published=True
+        ).order_by('order').select_related('chapter')
+
+        students_qs = Student.objects.filter(current_class_id=class_id, is_active=True).select_related('user')
+        total_students = students_qs.count()
+
+        result = []
+        for lesson in lessons:
+            completions = LessonProgress.objects.filter(lesson=lesson, is_completed=True).count()
+            started     = LessonProgress.objects.filter(lesson=lesson).exclude(started_at=None).count()
+            avg_pct     = LessonProgress.objects.filter(lesson=lesson).aggregate(a=models.Avg('watch_percent'))['a'] or 0
+            result.append({
+                'lesson_id':     str(lesson.id),
+                'title':         lesson.title,
+                'chapter_title': lesson.chapter.title if lesson.chapter else None,
+                'order':         lesson.order,
+                'total_students': total_students,
+                'started':       started,
+                'completed':     completions,
+                'completion_rate': round(completions / total_students * 100, 1) if total_students else 0,
+                'avg_watch_percent': round(float(avg_pct), 1),
+            })
+
+        # Per-student overview
+        student_overview = []
+        for st in students_qs:
+            done = LessonProgress.objects.filter(student=st, lesson__in=lessons, is_completed=True).count()
+            student_overview.append({
+                'matricule':    st.matricule,
+                'name':         f"{st.user.first_name} {st.user.last_name}".strip(),
+                'completed':    done,
+                'total':        lessons.count(),
+                'percent':      round(done / lessons.count() * 100, 1) if lessons.count() else 0,
+            })
+
+        return Response({
+            'lessons': result,
+            'students': sorted(student_overview, key=lambda x: -x['percent']),
+            'total_lessons': lessons.count(),
+            'total_students': total_students,
+        })
+
+    @action(detail=True, methods=['post'], url_path='mark-complete')
+    def mark_complete(self, request, pk=None):
+        """Manual completion for non-trackable lessons (text/pdf/file)."""
+        lesson = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+        if not lesson.is_unlocked_for(student):
+            return Response({'detail': 'Cette leçon est verrouillée'}, status=status.HTTP_403_FORBIDDEN)
+
+        from django.utils import timezone
+        progress, _ = LessonProgress.objects.get_or_create(
+            student=student, lesson=lesson,
+            defaults={'started_at': timezone.now()}
+        )
+        # Only auto-satisfy the watch gate for lessons with no trackable media —
+        # video/audio lessons must reach min_watch_percent via real playback.
+        has_media = lesson.attachments.filter(block_type__in=['VIDEO', 'AUDIO'], is_active=True).exists()
+        if not has_media and lesson.min_watch_percent > 0:
+            progress.watch_percent = 100
+        progress.save()
+        progress.evaluate_completion()
+        return Response(LessonProgressSerializer(progress).data)
+
+
+class ChapterViewSet(viewsets.ModelViewSet):
+    queryset = Chapter.objects.select_related('class_obj', 'subject').prefetch_related('lessons').all()
+    serializer_class = ChapterSerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = ['order', 'created_at']
+    filterset_fields = ['class_obj', 'subject', 'is_published', 'is_active']
+
+
+class LearningPathView(APIView):
+    """Structured Programme → Chapitre → Leçon view with per-student lock state."""
+
+    def get(self, request):
+        class_obj_id = request.query_params.get('class_obj')
+        subject_id = request.query_params.get('subject')
+        if not class_obj_id or not subject_id:
+            return Response(
+                {'detail': 'class_obj et subject sont requis'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        student = getattr(request.user, 'student_profile', None)
+
+        chapters = Chapter.objects.filter(
+            class_obj_id=class_obj_id, subject_id=subject_id, is_active=True, is_published=True
+        ).order_by('order').prefetch_related('lessons')
+
+        def serialize_lesson(lesson):
+            data = LessonListSerializer(lesson, context={'request': request}).data
+            return data
+
+        chapters_data = []
+        for chapter in chapters:
+            lessons = chapter.lessons.filter(is_active=True, is_published=True).order_by('order')
+            chapters_data.append({
+                'id': str(chapter.id),
+                'title': chapter.title,
+                'description': chapter.description,
+                'order': chapter.order,
+                'is_unlocked': chapter.is_unlocked_for(student) if student else True,
+                'is_completed': chapter.is_completed_by(student) if student else False,
+                'lessons': [serialize_lesson(l) for l in lessons],
+            })
+
+        ungrouped = Lesson.objects.filter(
+            class_obj_id=class_obj_id, subject_id=subject_id, chapter__isnull=True,
+            is_active=True, is_published=True
+        ).order_by('order')
+
+        return Response({
+            'chapters': chapters_data,
+            'ungrouped_lessons': [serialize_lesson(l) for l in ungrouped],
+        })
 
 
 class LessonAttachmentViewSet(viewsets.ModelViewSet):
     queryset = LessonAttachment.objects.select_related('lesson').all()
     serializer_class = LessonAttachmentSerializer
-    filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['lesson', 'is_active']
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = ['order', 'created_at']
+    filterset_fields = ['lesson', 'block_type', 'is_active']
+
+    @action(detail=False, methods=['post'])
+    def reorder(self, request):
+        """Bulk-update block order after a drag&drop reorder.
+        Body: { "blocks": [{"id": "<uuid>", "order": 0}, ...] }
+        """
+        blocks = request.data.get('blocks', [])
+        ids = [b['id'] for b in blocks]
+        existing = {
+            str(a.id): a for a in
+            LessonAttachment.objects.filter(id__in=ids)
+        }
+        updated = []
+        for b in blocks:
+            attachment = existing.get(str(b['id']))
+            if attachment:
+                attachment.order = b['order']
+                updated.append(attachment)
+        LessonAttachment.objects.bulk_update(updated, ['order'])
+        return Response({'updated': len(updated)})
+
+
+class QuizViewSet(viewsets.ModelViewSet):
+    queryset = Quiz.objects.select_related('class_obj', 'subject', 'lesson').prefetch_related('questions__choices').all()
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['title', 'description']
+    filterset_fields = ['class_obj', 'subject', 'lesson', 'is_published', 'is_active']
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return QuizListSerializer
+        return QuizSerializer
+
+    @action(detail=True, methods=['get'])
+    def take(self, request, pk=None):
+        """Sanitized quiz (no correct answers) for a student about to attempt it."""
+        quiz = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        attempts_used = quiz.attempts.filter(student=student).count() if student else 0
+        if quiz.max_attempts and attempts_used >= quiz.max_attempts:
+            return Response({'detail': 'Nombre maximum de tentatives atteint'}, status=status.HTTP_403_FORBIDDEN)
+        data = QuizTakeSerializer(quiz).data
+        if quiz.shuffle_questions:
+            import random
+            random.shuffle(data['questions'])
+        data['attempts_used'] = attempts_used
+        return Response(data)
+
+    @action(detail=True, methods=['post'], url_path='start-attempt')
+    def start_attempt(self, request, pk=None):
+        quiz = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempts_used = quiz.attempts.filter(student=student).count()
+        if quiz.max_attempts and attempts_used >= quiz.max_attempts:
+            return Response({'detail': 'Nombre maximum de tentatives atteint'}, status=status.HTTP_403_FORBIDDEN)
+
+        if quiz.lesson_id and not quiz.lesson.is_unlocked_for(student):
+            return Response({'detail': 'Ce quiz est verrouillé'}, status=status.HTTP_403_FORBIDDEN)
+
+        attempt = QuizAttempt.objects.create(quiz=quiz, student=student, max_score=quiz.max_score)
+        return Response(QuizAttemptSerializer(attempt).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='my-attempts')
+    def my_attempts(self, request, pk=None):
+        quiz = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response([])
+        attempts = quiz.attempts.filter(student=student).order_by('-started_at')
+        return Response(QuizAttemptSerializer(attempts, many=True).data)
+
+    @action(detail=True, methods=['get'], url_path='analytics')
+    def analytics(self, request, pk=None):
+        """Lot 11 — Admin quiz analytics: per-question stats, pass rate, rankings."""
+        from decimal import Decimal
+        quiz = self.get_object()
+        attempts = quiz.attempts.filter(submitted_at__isnull=False).select_related('student__user').prefetch_related('answers__question', 'answers__selected_choices')
+
+        total = attempts.count()
+        passed = attempts.filter(is_passed=True).count()
+        avg_score = attempts.aggregate(avg=models.Avg('percent'))['avg'] or 0
+
+        # Per-question stats
+        questions_stats = []
+        for q in quiz.questions.filter(is_active=True).order_by('order'):
+            q_answers = AttemptAnswer.objects.filter(question=q, attempt__submitted_at__isnull=False)
+            q_total = q_answers.count()
+            q_correct = q_answers.filter(is_correct=True).count()
+            q_pending = q_answers.filter(is_correct__isnull=True).count()
+            questions_stats.append({
+                'id': str(q.id),
+                'text': q.text[:100],
+                'question_type': q.question_type,
+                'points': float(q.points),
+                'total_answers': q_total,
+                'correct': q_correct,
+                'incorrect': q_total - q_correct - q_pending,
+                'pending': q_pending,
+                'success_rate': round(q_correct / q_total * 100, 1) if q_total else 0,
+            })
+
+        # Per-student results
+        student_results = []
+        for att in attempts.order_by('-percent')[:50]:
+            student_results.append({
+                'student_name': f"{att.student.user.first_name} {att.student.user.last_name}".strip(),
+                'matricule': att.student.matricule,
+                'score': float(att.score),
+                'percent': float(att.percent),
+                'is_passed': att.is_passed,
+                'is_graded': att.is_graded,
+                'submitted_at': att.submitted_at,
+                'attempt_id': str(att.id),
+            })
+
+        # Ungraded TEXT answers
+        ungraded = AttemptAnswer.objects.filter(
+            question__quiz=quiz, is_correct__isnull=True, question__question_type='TEXT',
+            attempt__submitted_at__isnull=False
+        ).select_related('attempt__student__user', 'question').order_by('-attempt__submitted_at')[:30]
+        ungraded_data = [{
+            'id': str(a.id),
+            'attempt_id': str(a.attempt_id),
+            'student_name': f"{a.attempt.student.user.first_name} {a.attempt.student.user.last_name}".strip(),
+            'question_text': a.question.text[:200],
+            'question_id': str(a.question_id),
+            'max_points': float(a.question.points),
+            'response': a.text_response,
+            'expected': a.question.text_answer,
+        } for a in ungraded]
+
+        return Response({
+            'total_attempts': total,
+            'passed': passed,
+            'pass_rate': round(passed / total * 100, 1) if total else 0,
+            'average_score': round(float(avg_score), 1),
+            'questions': questions_stats,
+            'student_results': student_results,
+            'ungraded_count': ungraded.count() if hasattr(ungraded, 'count') else len(ungraded_data),
+            'ungraded': ungraded_data,
+        })
+
+    @action(detail=True, methods=['post'], url_path='ai-generate')
+    def ai_generate(self, request, pk=None):
+        """Lot 11 — Generate quiz questions with AI."""
+        from .ai_service import _call_claude
+        import json as _json
+        quiz = self.get_object()
+        topic   = request.data.get('topic', quiz.title)
+        count   = min(int(request.data.get('count', 5)), 20)
+        q_type  = request.data.get('question_type', 'QCU')
+        level   = request.data.get('level', 'moyen')
+
+        system = (
+            "Tu es un générateur de quiz pédagogique. Génère des questions en JSON valide UNIQUEMENT, "
+            "sans texte autour. Format: [{\"text\": \"...\", \"explanation\": \"...\", \"points\": 1, "
+            "\"choices\": [{\"text\": \"...\", \"is_correct\": false}, ...]}]. "
+            "Pour QCU: 4 choix dont 1 correct. Pour QCM: 4 choix dont 2+ corrects. "
+            "Pour TEXT: pas de choices, ajouter \"text_answer\": \"réponse\". "
+            "Pour NUMERIC: pas de choices, ajouter \"numeric_answer\": 42. "
+        )
+        messages = [{
+            "role": "user",
+            "content": f"Génère {count} questions de type {q_type} niveau {level} sur le sujet: {topic}. Matière: {quiz.subject_name if hasattr(quiz, 'subject_name') else ''}. Langue: français."
+        }]
+
+        raw, tokens = _call_claude(system, messages, max_tokens=3000)
+
+        # Extract JSON array from response
+        try:
+            match = __import__('re').search(r'\[.*\]', raw, __import__('re').DOTALL)
+            items = _json.loads(match.group()) if match else []
+        except Exception:
+            return Response({'detail': 'Erreur de parsing IA', 'raw': raw}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        created_questions = []
+        for i, item in enumerate(items):
+            q_data = {
+                'quiz': quiz.id,
+                'question_type': q_type,
+                'text': item.get('text', ''),
+                'points': item.get('points', 1),
+                'explanation': item.get('explanation', ''),
+                'order': quiz.questions.count() + i,
+            }
+            if q_type == 'TEXT':
+                q_data['text_answer'] = item.get('text_answer', '')
+            elif q_type == 'NUMERIC':
+                q_data['numeric_answer'] = item.get('numeric_answer')
+
+            from .serializers import QuestionSerializer as QS
+            ser = QS(data=q_data)
+            if ser.is_valid():
+                question = ser.save()
+                # Create choices
+                for c in item.get('choices', []):
+                    Choice.objects.create(
+                        question=question,
+                        text=c.get('text', ''),
+                        is_correct=c.get('is_correct', False),
+                        order=0
+                    )
+                created_questions.append(question)
+
+        return Response({
+            'created': len(created_questions),
+            'tokens_used': tokens,
+            'message': f'{len(created_questions)} question(s) générée(s) par IA'
+        })
+
+
+class QuestionViewSet(viewsets.ModelViewSet):
+    queryset = Question.objects.select_related('quiz').prefetch_related('choices').all()
+    serializer_class = QuestionSerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = ['order']
+    filterset_fields = ['quiz', 'question_type', 'is_active']
+
+
+class ChoiceViewSet(viewsets.ModelViewSet):
+    queryset = Choice.objects.select_related('question').all()
+    serializer_class = ChoiceSerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = ['order']
+    filterset_fields = ['question', 'is_active']
+
+
+class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = QuizAttempt.objects.select_related('quiz', 'student__user').prefetch_related('answers__question').all()
+    serializer_class = QuizAttemptSerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = ['started_at']
+    filterset_fields = ['quiz', 'student', 'is_passed', 'is_graded']
+
+    @action(detail=True, methods=['post'], url_path='grade-text')
+    def grade_text(self, request, pk=None):
+        """Lot 11 — Manually grade a TEXT answer."""
+        attempt = self.get_object()
+        answer_id  = request.data.get('answer_id')
+        is_correct = request.data.get('is_correct', False)
+        points     = request.data.get('points_earned', None)
+        feedback   = request.data.get('feedback', '')
+        try:
+            answer = AttemptAnswer.objects.get(id=answer_id, attempt=attempt)
+        except AttemptAnswer.DoesNotExist:
+            return Response({'detail': 'Réponse introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        from decimal import Decimal
+        answer.is_correct     = is_correct
+        answer.points_earned  = Decimal(str(points)) if points is not None else (answer.question.points if is_correct else Decimal('0'))
+        answer.manual_feedback = feedback
+        answer.save()
+        attempt.finalize()
+        return Response({'status': 'graded', 'attempt_percent': float(attempt.percent), 'is_passed': attempt.is_passed})
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        """Grade every submitted answer, finalize the attempt, and re-evaluate
+        lesson completion if this quiz gates a lesson (requires_quiz)."""
+        attempt = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student or attempt.student_id != student.id:
+            return Response({'detail': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
+        if attempt.submitted_at:
+            return Response({'detail': 'Cette tentative a déjà été soumise'}, status=status.HTTP_400_BAD_REQUEST)
+
+        raw_answers = request.data.get('answers', [])
+        for raw in raw_answers:
+            ser = AttemptAnswerSubmitSerializer(data=raw)
+            ser.is_valid(raise_exception=True)
+            d = ser.validated_data
+            try:
+                question = attempt.quiz.questions.get(id=d['question_id'])
+            except Question.DoesNotExist:
+                continue
+
+            answer, _ = AttemptAnswer.objects.update_or_create(
+                attempt=attempt, question=question,
+                defaults={
+                    'text_response': d.get('text_response', ''),
+                    'numeric_response': d.get('numeric_response'),
+                    'ordering_response': d.get('ordering_response', []),
+                    'matching_response': d.get('matching_response', {}),
+                }
+            )
+            if d.get('choice_ids'):
+                answer.selected_choices.set(d['choice_ids'])
+            else:
+                answer.selected_choices.clear()
+            answer.grade()
+
+        attempt.finalize()
+
+        if attempt.quiz.lesson_id:
+            progress = LessonProgress.objects.filter(student=student, lesson_id=attempt.quiz.lesson_id).first()
+            if progress:
+                progress.evaluate_completion()
+
+        return Response(QuizAttemptSerializer(attempt).data)
 
 
 class AssignmentViewSet(viewsets.ModelViewSet):
@@ -230,3 +712,709 @@ class CorrectSubmissionView(APIView):
             AssignmentCorrectionSerializer(correction).data,
             status=status.HTTP_201_CREATED
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOT 14 — Bibliothèque numérique
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LibraryDocumentViewSet(viewsets.ModelViewSet):
+    queryset = LibraryDocument.objects.prefetch_related('subjects', 'favorites').all()
+    serializer_class = LibraryDocumentSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['title', 'authors', 'abstract', 'keywords', 'isbn', 'doi']
+    ordering_fields = ['title', 'year', 'download_count', 'view_count', 'created_at']
+    filterset_fields = ['doc_type', 'language', 'is_downloadable', 'is_online_readable', 'is_published', 'is_active']
+
+    def perform_create(self, serializer):
+        serializer.save(uploaded_by=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def toggle_favorite(self, request, pk=None):
+        doc = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+        fav, created = DocumentFavorite.objects.get_or_create(student=student, document=doc)
+        if not created:
+            fav.delete()
+            return Response({'is_favorite': False})
+        return Response({'is_favorite': True})
+
+    @action(detail=True, methods=['post'], url_path='track-view')
+    def track_view(self, request, pk=None):
+        doc = self.get_object()
+        LibraryDocument.objects.filter(pk=doc.pk).update(view_count=doc.view_count + 1)
+        return Response({'view_count': doc.view_count + 1})
+
+    @action(detail=True, methods=['post'], url_path='track-download')
+    def track_download(self, request, pk=None):
+        doc = self.get_object()
+        LibraryDocument.objects.filter(pk=doc.pk).update(download_count=doc.download_count + 1)
+        return Response({'download_count': doc.download_count + 1})
+
+    @action(detail=True, methods=['post'], url_path='save-progress')
+    def save_progress(self, request, pk=None):
+        doc = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+        page = request.data.get('current_page', 1)
+        progress, _ = ReadingProgress.objects.update_or_create(
+            student=student, document=doc,
+            defaults={'current_page': max(1, int(page))}
+        )
+        return Response(ReadingProgressSerializer(progress).data)
+
+    @action(detail=False, methods=['get'], url_path='my-favorites')
+    def my_favorites(self, request):
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response([])
+        doc_ids = DocumentFavorite.objects.filter(student=student).values_list('document_id', flat=True)
+        docs = LibraryDocument.objects.filter(id__in=doc_ids, is_active=True)
+        return Response(LibraryDocumentSerializer(docs, many=True, context={'request': request}).data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOT 12 — Examens sécurisés
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SecureExamViewSet(viewsets.ModelViewSet):
+    queryset = SecureExam.objects.select_related('class_obj', 'subject', 'quiz').all()
+    serializer_class = SecureExamSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['title', 'description']
+    ordering_fields = ['start_date', 'created_at']
+    filterset_fields = ['class_obj', 'subject', 'exam_type', 'is_published', 'is_active']
+
+    @action(detail=True, methods=['post'])
+    def publish(self, request, pk=None):
+        exam = self.get_object()
+        exam.is_published = True
+        exam.save()
+        return Response(SecureExamSerializer(exam).data)
+
+    @action(detail=True, methods=['post'], url_path='start-session')
+    def start_session(self, request, pk=None):
+        """Student starts a secure exam session."""
+        exam = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+        if not exam.is_available():
+            return Response({'detail': 'Cet examen n\'est pas disponible'}, status=status.HTTP_403_FORBIDDEN)
+
+        existing = ExamSession.objects.filter(exam=exam, student=student).first()
+        if existing and existing.status in ('SUBMITTED',):
+            return Response({'detail': 'Vous avez déjà soumis cet examen'}, status=status.HTTP_400_BAD_REQUEST)
+
+        session, created = ExamSession.objects.get_or_create(
+            exam=exam, student=student,
+            defaults={'status': 'STARTED', 'time_remaining_seconds': exam.duration_minutes * 60}
+        )
+
+        if created and exam.quiz:
+            attempt = QuizAttempt.objects.create(quiz=exam.quiz, student=student, max_score=exam.quiz.max_score)
+            session.quiz_attempt = attempt
+            session.save()
+
+        from .serializers import QuizTakeSerializer
+        result = ExamSessionSerializer(session).data
+        if session.quiz_attempt:
+            quiz_data = QuizTakeSerializer(exam.quiz).data
+            if exam.quiz.shuffle_questions:
+                import random
+                random.shuffle(quiz_data['questions'])
+            result['quiz'] = quiz_data
+        return Response(result, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='log-event')
+    def log_event(self, request, pk=None):
+        """Anti-cheat: log a suspicious event in the student's exam session."""
+        exam = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            session = ExamSession.objects.get(exam=exam, student=student)
+        except ExamSession.DoesNotExist:
+            return Response({'detail': 'Session non trouvée'}, status=status.HTTP_404_NOT_FOUND)
+
+        event_type = request.data.get('event_type', 'OTHER')
+        details = request.data.get('details', {})
+        session.log_event(event_type, details)
+        return Response({'status': 'logged', 'is_flagged': session.is_flagged})
+
+    @action(detail=True, methods=['get'], url_path='sessions')
+    def sessions(self, request, pk=None):
+        exam = self.get_object()
+        qs = ExamSession.objects.filter(exam=exam).select_related('student__user', 'quiz_attempt')
+        return Response(ExamSessionSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['get'], url_path='my-session')
+    def my_session(self, request, pk=None):
+        exam = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response(None)
+        session = ExamSession.objects.filter(exam=exam, student=student).first()
+        return Response(ExamSessionSerializer(session).data if session else None)
+
+
+class ExamSessionSnapshotView(APIView):
+    """POST /elearning/exams/sessions/<session_id>/snapshot/ — Upload webcam snapshot."""
+
+    def post(self, request, session_id):
+        try:
+            session = ExamSession.objects.get(id=session_id)
+        except ExamSession.DoesNotExist:
+            return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        image = request.FILES.get('snapshot')
+        if not image:
+            return Response({'detail': 'Image requise.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        snapshot = ExamSnapshot.objects.create(session=session, image=image)
+
+        # Optional AI face analysis (async-friendly stub — replace with real vision call)
+        face_detected = True
+        phone_detected = False
+        try:
+            from .ai_service import _call_claude
+            import base64
+            img_b64 = base64.b64encode(image.read()).decode()
+            system = "Tu es un système de surveillance d'examen. Analyse l'image fournie et réponds en JSON: {\"face_detected\": bool, \"phone_detected\": bool, \"multiple_faces\": bool, \"suspicious\": bool, \"note\": \"...\"}."
+            messages = [{
+                "role": "user",
+                "content": [{
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                }, {"type": "text", "text": "Analyse cette capture webcam d'examen."}]
+            }]
+            import json as _json
+            result, _ = _call_claude(system, messages, max_tokens=200)
+            try:
+                data = _json.loads(result)
+                face_detected  = data.get('face_detected', True)
+                phone_detected = data.get('phone_detected', False)
+                snapshot.face_detected  = face_detected
+                snapshot.phone_detected = phone_detected
+                snapshot.ai_analysis    = result
+                snapshot.save()
+
+                if not face_detected or phone_detected or data.get('multiple_faces') or data.get('suspicious'):
+                    detail = data.get('note', 'Anomalie détectée')
+                    session.log_event('AI_FLAG', detail)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        return Response({
+            'snapshot_id': str(snapshot.id),
+            'face_detected': face_detected,
+            'phone_detected': phone_detected,
+        })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOT 13 — Laboratoires virtuels
+# ─────────────────────────────────────────────────────────────────────────────
+
+class VirtualLabViewSet(viewsets.ModelViewSet):
+    queryset = VirtualLab.objects.select_related('class_obj', 'subject', 'lesson').all()
+    serializer_class = VirtualLabSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['title', 'description', 'instructions']
+    ordering_fields = ['order', 'due_date', 'created_at']
+    filterset_fields = ['class_obj', 'subject', 'lesson', 'lab_type', 'is_published', 'is_active']
+
+    @action(detail=True, methods=['post'])
+    def publish(self, request, pk=None):
+        lab = self.get_object()
+        lab.is_published = True
+        lab.save()
+        return Response(VirtualLabSerializer(lab, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='start')
+    def start(self, request, pk=None):
+        lab = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempts = LabSubmission.objects.filter(lab=lab, student=student).count()
+        if lab.max_attempts and attempts >= lab.max_attempts:
+            return Response({'detail': 'Nombre maximum de tentatives atteint'}, status=status.HTTP_403_FORBIDDEN)
+
+        submission = LabSubmission.objects.create(lab=lab, student=student, status='STARTED')
+        return Response(LabSubmissionSerializer(submission).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='submissions')
+    def lab_submissions(self, request, pk=None):
+        lab = self.get_object()
+        qs = LabSubmission.objects.filter(lab=lab).select_related('student__user', 'graded_by__user')
+        return Response(LabSubmissionSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['get'], url_path='my-submission')
+    def my_submission(self, request, pk=None):
+        lab = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response(None)
+        sub = LabSubmission.objects.filter(lab=lab, student=student).order_by('-started_at').first()
+        return Response(LabSubmissionSerializer(sub).data if sub else None)
+
+
+class LabSubmissionViewSet(viewsets.ModelViewSet):
+    queryset = LabSubmission.objects.select_related('lab', 'student__user', 'graded_by__user').all()
+    serializer_class = LabSubmissionSerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = ['started_at', 'submitted_at']
+    filterset_fields = ['lab', 'student', 'status', 'is_active']
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        from django.utils import timezone
+        submission = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student or submission.student_id != student.id:
+            return Response({'detail': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
+
+        submission.status = 'SUBMITTED'
+        submission.submitted_at = timezone.now()
+        submission.report_text = request.data.get('report_text', submission.report_text)
+        if 'report_file' in request.FILES:
+            submission.report_file = request.FILES['report_file']
+        if 'screenshot' in request.FILES:
+            submission.screenshot = request.FILES['screenshot']
+        submission.save()
+        return Response(LabSubmissionSerializer(submission).data)
+
+    @action(detail=True, methods=['post'])
+    def grade(self, request, pk=None):
+        from django.utils import timezone
+        submission = self.get_object()
+        teacher = getattr(request.user, 'teacher_profile', None)
+        score = request.data.get('score')
+        if score is None:
+            return Response({'detail': 'Note requise'}, status=status.HTTP_400_BAD_REQUEST)
+        submission.score = score
+        submission.feedback = request.data.get('feedback', '')
+        submission.graded_by = teacher
+        submission.graded_at = timezone.now()
+        submission.status = 'GRADED'
+        submission.save()
+        return Response(LabSubmissionSerializer(submission).data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOTS 15/16/17 — IA pédagogique / IA Enseignant / Correction automatique
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AIConversationViewSet(viewsets.ModelViewSet):
+    serializer_class = AIConversationSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['title']
+    ordering_fields = ['updated_at', 'created_at']
+    filterset_fields = ['conv_type', 'subject', 'lesson', 'is_active']
+
+    def get_queryset(self):
+        return AIConversation.objects.filter(
+            user=self.request.user, is_active=True
+        ).select_related('subject', 'lesson').prefetch_related('messages').order_by('-updated_at')
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return AIConversationListSerializer
+        return AIConversationSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'], url_path='send')
+    def send_message(self, request, pk=None):
+        """Send a message and get AI response (Lots 15/16)."""
+        from .ai_service import chat_tutor, chat_teacher
+        from django.utils import timezone
+
+        conversation = self.get_object()
+        if conversation.user_id != request.user.id:
+            return Response({'detail': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
+
+        ser = AISendMessageSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        user_content = ser.validated_data['content']
+
+        AIMessage.objects.create(conversation=conversation, role='user', content=user_content)
+
+        history = [
+            {'role': m.role, 'content': m.content}
+            for m in conversation.messages.order_by('created_at')
+        ]
+
+        subject_name = conversation.subject.name if conversation.subject else ''
+        lesson_title = conversation.lesson.title if conversation.lesson else ''
+
+        if conversation.conv_type in ('TEACHER', 'CONTENT', 'QUIZ_GEN'):
+            ai_text, tokens = chat_teacher(history, subject_name)
+        else:
+            ai_text, tokens = chat_tutor(history, subject_name, lesson_title)
+
+        ai_msg = AIMessage.objects.create(
+            conversation=conversation, role='assistant',
+            content=ai_text, tokens_used=tokens,
+        )
+        AIConversation.objects.filter(pk=conversation.pk).update(updated_at=timezone.now())
+
+        if not conversation.title and len(history) <= 2:
+            short = user_content[:80].strip()
+            AIConversation.objects.filter(pk=conversation.pk).update(title=short)
+
+        return Response(AIMessageSerializer(ai_msg).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['delete'], url_path='clear')
+    def clear_messages(self, request, pk=None):
+        conversation = self.get_object()
+        conversation.messages.all().delete()
+        return Response({'status': 'cleared'})
+
+
+class AIGenerateView(APIView):
+    """Lot 16 — One-shot content generation (no conversation history)."""
+
+    def post(self, request):
+        from .ai_service import generate_content
+        ser = AIGenerateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        text, tokens = generate_content(d['generate_type'], d['prompt'], d.get('options', {}))
+        return Response({'result': text, 'tokens_used': tokens})
+
+
+class AIGradeView(APIView):
+    """Lot 17 — AI grading of a text submission."""
+
+    def post(self, request):
+        from .ai_service import grade_submission
+        ser = AIGradeSubmissionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        try:
+            submission = AssignmentSubmission.objects.get(id=d['submission_id'])
+        except AssignmentSubmission.DoesNotExist:
+            return Response({'detail': 'Soumission non trouvée'}, status=status.HTTP_404_NOT_FOUND)
+
+        text_to_grade = submission.content or ''
+        ai_result, tokens = grade_submission(text_to_grade, d.get('grading_criteria', ''), d.get('max_score', 20))
+
+        import json as _json
+        try:
+            parsed = _json.loads(ai_result)
+        except Exception:
+            parsed = {'feedback': ai_result}
+
+        return Response({'ai_result': parsed, 'tokens_used': tokens, 'submission_id': str(submission.id)})
+
+
+# =============================================================================
+# LOT 9 — VIDÉOTHÈQUE
+# =============================================================================
+
+class VideoLibraryViewSet(viewsets.ModelViewSet):
+    serializer_class = VideoLibrarySerializer
+    filter_backends  = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['class_obj', 'subject', 'lesson', 'source_type', 'is_published']
+    search_fields    = ['title', 'description', 'tags']
+    ordering_fields  = ['order', 'title', 'view_count', 'created_at']
+
+    def get_queryset(self):
+        return VideoLibrary.objects.filter(is_active=True).prefetch_related('subtitles')
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    @action(detail=True, methods=['post'], url_path='track-progress')
+    def track_progress(self, request, pk=None):
+        video = self.get_object()
+        from apps.students.models import Student
+        try:
+            student = Student.objects.get(user=request.user)
+        except Student.DoesNotExist:
+            return Response({'detail': 'Profil étudiant introuvable'}, status=status.HTTP_404_NOT_FOUND)
+
+        position  = int(request.data.get('position_seconds', 0))
+        completed = bool(request.data.get('is_completed', False))
+
+        prog, created = VideoProgress.objects.get_or_create(
+            student=student, video=video,
+            defaults={'position_seconds': position, 'is_completed': completed}
+        )
+        if not created:
+            watched_delta = position - prog.position_seconds if position > prog.position_seconds else 0
+            prog.position_seconds = position
+            prog.total_watched_seconds = (prog.total_watched_seconds or 0) + watched_delta
+            if completed:
+                prog.is_completed = True
+            prog.save()
+
+        if created or position > (prog.position_seconds - 30):
+            VideoLibrary.objects.filter(pk=video.pk).update(view_count=video.view_count + 1)
+
+        return Response({'position_seconds': prog.position_seconds, 'is_completed': prog.is_completed})
+
+    @action(detail=True, methods=['post'], url_path='download-token')
+    def download_token(self, request, pk=None):
+        video = self.get_object()
+        if not video.is_downloadable:
+            return Response({'detail': 'Téléchargement non autorisé pour cette vidéo.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        from apps.students.models import Student
+        try:
+            student = Student.objects.get(user=request.user)
+        except Student.DoesNotExist:
+            return Response({'detail': 'Profil étudiant introuvable'}, status=status.HTTP_404_NOT_FOUND)
+
+        token_obj = video.generate_download_token(student)
+        return Response({
+            'token': token_obj.token,
+            'expires_at': token_obj.expires_at,
+            'download_url': request.build_absolute_uri(
+                f'/api/elearning/videos/{video.id}/download/?token={token_obj.token}'
+            )
+        })
+
+    @action(detail=True, methods=['get'], url_path='download')
+    def download(self, request, pk=None):
+        from django.http import FileResponse, Http404
+        video = self.get_object()
+        token_str = request.query_params.get('token', '')
+        try:
+            token_obj = VideoDownloadToken.objects.get(token=token_str, video=video)
+        except VideoDownloadToken.DoesNotExist:
+            return Response({'detail': 'Token invalide.'}, status=status.HTTP_403_FORBIDDEN)
+        if not token_obj.is_valid():
+            return Response({'detail': 'Token expiré ou déjà utilisé.'}, status=status.HTTP_403_FORBIDDEN)
+        token_obj.is_used = True
+        token_obj.save()
+        if video.video_file:
+            return FileResponse(video.video_file.open('rb'), as_attachment=True,
+                                filename=f"{video.title}.mp4")
+        return Response({'detail': 'Pas de fichier à télécharger.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'], url_path='recommendations')
+    def recommendations(self, request):
+        from apps.students.models import Student
+        from .ai_service import _call_claude
+        try:
+            student = Student.objects.get(user=request.user)
+        except Student.DoesNotExist:
+            return Response([])
+
+        watched_ids = VideoProgress.objects.filter(student=student).values_list('video_id', flat=True)
+        watched_titles = list(VideoLibrary.objects.filter(id__in=watched_ids).values_list('title', flat=True))
+        all_videos_qs = VideoLibrary.objects.filter(is_published=True, is_active=True).exclude(id__in=watched_ids)
+
+        if not all_videos_qs.exists():
+            return Response([])
+
+        candidate_titles = list(all_videos_qs.values_list('title', 'tags')[:30])
+        candidates_text  = '\n'.join([f"- {t[0]} [tags: {t[1]}]" for t in candidate_titles])
+        watched_text     = ', '.join(watched_titles[:10]) if watched_titles else 'aucune'
+
+        system = "Tu es un moteur de recommandation pédagogique. Réponds uniquement avec une liste JSON d'indices (0-basé) des vidéos recommandées, ex: [0,2,5]."
+        messages = [{"role": "user", "content": f"Vidéos vues : {watched_text}\n\nCandidats :\n{candidates_text}\n\nRecommande les 5 meilleures vidéos pour cet étudiant."}]
+        result, _ = _call_claude(system, messages, max_tokens=200)
+
+        import json as _json, re
+        try:
+            indices = _json.loads(re.search(r'\[.*\]', result, re.DOTALL).group())
+        except Exception:
+            indices = list(range(min(5, len(candidate_titles))))
+
+        all_videos = list(all_videos_qs[:30])
+        recommended = [all_videos[i] for i in indices if 0 <= i < len(all_videos)]
+        serializer = VideoLibrarySerializer(recommended[:5], many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='upload-subtitle')
+    def upload_subtitle(self, request, pk=None):
+        video = self.get_object()
+        lang_code  = request.data.get('language_code', 'fr')
+        lang_label = request.data.get('language_label', 'Français')
+        file_obj   = request.FILES.get('file')
+        if not file_obj:
+            return Response({'detail': 'Fichier requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        sub, created = VideoSubtitle.objects.update_or_create(
+            video=video, language_code=lang_code,
+            defaults={'language_label': lang_label, 'file': file_obj}
+        )
+        return Response(VideoSubtitleSerializer(sub, context={'request': request}).data,
+                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='my-progress')
+    def my_progress(self, request):
+        from apps.students.models import Student
+        try:
+            student = Student.objects.get(user=request.user)
+        except Student.DoesNotExist:
+            return Response([])
+        qs = VideoProgress.objects.filter(student=student).select_related('video')
+        return Response(VideoProgressSerializer(qs, many=True).data)
+
+
+# =============================================================================
+# LOT 8 — CLASSES VIRTUELLES
+# =============================================================================
+
+class VirtualClassroomViewSet(viewsets.ModelViewSet):
+    serializer_class = VirtualClassroomSerializer
+    filter_backends  = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['class_obj', 'subject', 'provider', 'is_ended']
+    search_fields    = ['title']
+    ordering_fields  = ['start_time', 'created_at']
+
+    def get_queryset(self):
+        return VirtualClassroom.objects.filter(is_active=True)
+
+    def perform_create(self, serializer):
+        import uuid
+        data = serializer.validated_data
+        provider = data.get('provider', 'JITSI')
+        room_name = data.get('jitsi_room_name') or f"campus-{uuid.uuid4().hex[:8]}"
+        extra = {}
+        if provider == 'JITSI':
+            extra['jitsi_room_name'] = room_name
+            extra['join_url'] = f"https://meet.jit.si/{room_name}"
+        serializer.save(created_by=self.request.user, **extra)
+
+    @action(detail=True, methods=['post'], url_path='end')
+    def end_session(self, request, pk=None):
+        from django.utils import timezone
+        classroom = self.get_object()
+        classroom.is_ended = True
+        classroom.ended_at = timezone.now()
+        classroom.save()
+        return Response({'status': 'ended', 'ended_at': classroom.ended_at})
+
+    @action(detail=True, methods=['get'], url_path='polls')
+    def polls(self, request, pk=None):
+        classroom = self.get_object()
+        qs = classroom.polls.filter(is_active=True)
+        return Response(ClassroomPollSerializer(qs, many=True, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'], url_path='polls/create')
+    def create_poll(self, request, pk=None):
+        classroom = self.get_object()
+        question = request.data.get('question', '')
+        options  = request.data.get('options', [])
+        if not question or len(options) < 2:
+            return Response({'detail': 'Question et au moins 2 options requis.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        poll = ClassroomPoll.objects.create(classroom=classroom, question=question, options=options)
+        return Response(ClassroomPollSerializer(poll, context={'request': request}).data,
+                        status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='polls/(?P<poll_id>[^/.]+)/vote')
+    def vote_poll(self, request, pk=None, poll_id=None):
+        classroom = self.get_object()
+        from apps.students.models import Student
+        try:
+            student = Student.objects.get(user=request.user)
+            poll    = ClassroomPoll.objects.get(id=poll_id, classroom=classroom, is_active=True)
+        except Exception:
+            return Response({'detail': 'Sondage introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        option_idx = int(request.data.get('option', -1))
+        if option_idx < 0 or option_idx >= len(poll.options):
+            return Response({'detail': 'Option invalide.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        PollResponse.objects.update_or_create(
+            poll=poll, student=student,
+            defaults={'selected_option': option_idx}
+        )
+        return Response({'voted': True, 'option': option_idx})
+
+    @action(detail=True, methods=['post'], url_path='polls/(?P<poll_id>[^/.]+)/reveal')
+    def reveal_poll(self, request, pk=None, poll_id=None):
+        classroom = self.get_object()
+        try:
+            poll = ClassroomPoll.objects.get(id=poll_id, classroom=classroom)
+        except ClassroomPoll.DoesNotExist:
+            return Response({'detail': 'Sondage introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        poll.show_results = True
+        poll.save()
+        return Response(ClassroomPollSerializer(poll, context={'request': request}).data)
+
+    @action(detail=True, methods=['get'], url_path='chat')
+    def chat(self, request, pk=None):
+        classroom = self.get_object()
+        qs = classroom.chat_messages.order_by('created_at')
+        return Response(ClassroomChatMessageSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='chat/send')
+    def send_chat(self, request, pk=None):
+        classroom = self.get_object()
+        msg_text  = request.data.get('message', '').strip()
+        if not msg_text:
+            return Response({'detail': 'Message vide.'}, status=status.HTTP_400_BAD_REQUEST)
+        msg = ClassroomChatMessage.objects.create(
+            classroom=classroom, user=request.user, message=msg_text
+        )
+        return Response(ClassroomChatMessageSerializer(msg).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='hand-raises')
+    def hand_raises(self, request, pk=None):
+        classroom = self.get_object()
+        qs = classroom.hand_raises.filter(is_raised=True).order_by('raised_at')
+        return Response(HandRaiseSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='raise-hand')
+    def raise_hand(self, request, pk=None):
+        classroom = self.get_object()
+        from apps.students.models import Student
+        from django.utils import timezone
+        try:
+            student = Student.objects.get(user=request.user)
+        except Student.DoesNotExist:
+            return Response({'detail': 'Profil étudiant requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        hr, _ = HandRaise.objects.get_or_create(classroom=classroom, student=student)
+        hr.is_raised = True
+        hr.lowered_at = None
+        hr.save()
+        return Response({'raised': True})
+
+    @action(detail=True, methods=['post'], url_path='lower-hand')
+    def lower_hand(self, request, pk=None):
+        classroom = self.get_object()
+        from apps.students.models import Student
+        from django.utils import timezone
+        try:
+            student = Student.objects.get(user=request.user)
+            hr = HandRaise.objects.get(classroom=classroom, student=student)
+        except Exception:
+            return Response({'raised': False})
+        hr.is_raised = False
+        hr.lowered_at = timezone.now()
+        hr.save()
+        return Response({'raised': False})
+
+    @action(detail=True, methods=['post'], url_path='ai-summarize')
+    def ai_summarize(self, request, pk=None):
+        classroom = self.get_object()
+        transcript = request.data.get('transcript', classroom.transcript_text)
+        if not transcript:
+            return Response({'detail': 'Transcription requise.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .ai_service import _call_claude
+        system = "Tu es un assistant pédagogique. Génère un résumé structuré de la session de classe virtuelle en français. Inclus : points clés abordés, décisions, actions à effectuer, questions soulevées."
+        messages = [{"role": "user", "content": f"Transcription :\n{transcript}"}]
+        summary, tokens = _call_claude(system, messages, max_tokens=1024)
+
+        classroom.transcript_text = transcript
+        classroom.ai_summary = summary
+        classroom.save()
+        return Response({'ai_summary': summary, 'tokens_used': tokens})

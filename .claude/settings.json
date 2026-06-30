@@ -11,7 +11,10 @@
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(findstr -i \"print\\\\|sharing\\\\|file-system\\\\|pdf\")",
       "Bash(python manage.py shell -c ' *)",
-      "Bash(findstr /i \"datetimepicker\\\\|react-native-community\\\\|expo-date\")"
+      "Bash(findstr /i \"datetimepicker\\\\|react-native-community\\\\|expo-date\")",
+      "Bash(python -c \"import django; print\\(django.VERSION\\)\")",
+      "Bash(python manage.py makemigrations elearning)",
+      "Bash(grep -o '\"Lot [0-9]* [^\"\\\\\\\\]*' \"C:\\\\Users\\\\HP\\\\.claude\\\\projects\\\\c--Users-HP-Desktop-projets-campus-backend\\\\e9ddb0fb-fb2c-495e-a0b9-6364c3da1179.jsonl\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\HP\\Desktop\\projets\\campus-react\\src",
