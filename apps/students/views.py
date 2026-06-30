@@ -166,6 +166,16 @@ class StudentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+    @action(detail=True, methods=['get'], url_path='enrollments')
+    def enrollments(self, request, pk=None):
+        from apps.academic.models import Enrollment
+        from apps.academic.serializers import EnrollmentSerializer
+        student = self.get_object()
+        qs = student.enrollments.filter(
+            is_active=True
+        ).select_related('class_obj__level__program', 'academic_year')
+        return Response(EnrollmentSerializer(qs, many=True).data)
+
     @action(detail=True, methods=['get'])
     def files(self, request, pk=None):
         student = self.get_object()
