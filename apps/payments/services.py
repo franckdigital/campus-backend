@@ -10,7 +10,7 @@ from apps.finance.models import Payment, PaymentMethod
 class CinetPayService:
     """Service for CinetPay API integration."""
     
-    BASE_URL = 'https://api-checkout.cinetpay.net/v2'
+    BASE_URL = getattr(settings, 'CINETPAY_BASE_URL', 'https://api-checkout.cinetpay.net/v2')
     
     def __init__(self, site=None):
         if site:
