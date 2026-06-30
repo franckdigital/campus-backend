@@ -55,6 +55,12 @@ class Student(BaseModel):
         ('TRANSFERRED', 'Transféré'),
     ]
 
+    MODALITY_CHOICES = [
+        ('PRESENTIEL', 'Présentiel'),
+        ('ELEARNING', 'E-learning'),
+        ('HYBRIDE', 'Hybride'),
+    ]
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -75,6 +81,10 @@ class Student(BaseModel):
     )
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='ACTIVE')
+    modality = models.CharField(
+        max_length=20, choices=MODALITY_CHOICES, default='PRESENTIEL',
+        help_text="Mode de suivi : présentiel, e-learning ou hybride"
+    )
     admission_date = models.DateField()
     graduation_date = models.DateField(null=True, blank=True)
     

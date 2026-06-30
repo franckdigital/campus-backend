@@ -680,6 +680,12 @@ class LibraryDocument(BaseModel):
 
     subjects = models.ManyToManyField(Subject, blank=True, related_name='library_documents')
 
+    site = models.ForeignKey(
+        'core.Site', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='library_documents',
+        help_text="Site auquel ce document est rattaché. Laisser vide pour le rendre visible sur tous les sites."
+    )
+
     is_downloadable = models.BooleanField(default=True)
     is_online_readable = models.BooleanField(default=True)
     is_published = models.BooleanField(default=True)

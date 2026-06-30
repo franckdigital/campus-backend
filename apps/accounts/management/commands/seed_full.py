@@ -449,14 +449,20 @@ class Command(BaseCommand):
         else:
             levels_def = [('BTS1', 'BTS 1ere annee', 1), ('BTS2', 'BTS 2eme annee', 2)]
 
-        prog = Program.objects.create(
-            name=pname, code=pcode,
-            description=f'{pname} — {site.name}',
-            duration_years=pdur, site=site,
+        prog, _ = Program.objects.get_or_create(
+            code=pcode,
+            defaults=dict(
+                name=pname,
+                description=f'{pname} — {site.name}',
+                duration_years=pdur, site=site,
+            ),
         )
         levels = []
         for lcode, lname, order in levels_def:
-            lvl = Level.objects.create(name=lname, code=lcode, order=order, program=prog)
+            lvl, _ = Level.objects.get_or_create(
+                program=prog, code=lcode,
+                defaults=dict(name=lname, order=order),
+            )
             levels.append(lvl)
         print(f'  Programme: {pcode} ({pdur} ans) | Niveaux: {len(levels)}')
         return prog, levels

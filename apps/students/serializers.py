@@ -119,7 +119,7 @@ class StudentSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'id', 'user', 'user_data', 'matricule', 'gender', 'birth_date', 'birth_place',
-            'nationality', 'address', 'city', 'site', 'site_name', 'status',
+            'nationality', 'address', 'city', 'site', 'site_name', 'status', 'modality',
             'admission_date', 'graduation_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'current_card', 'current_class',
@@ -183,7 +183,7 @@ class StudentCreateSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'user_data', 'gender', 'birth_date', 'birth_place',
-            'nationality', 'address', 'city', 'site', 'status',
+            'nationality', 'address', 'city', 'site', 'status', 'modality',
             'admission_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'registration_fee',
@@ -238,7 +238,7 @@ class StudentListSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'id', 'matricule', 'full_name', 'email', 'phone',
-            'gender', 'site', 'site_name', 'status', 'is_active',
+            'gender', 'site', 'site_name', 'status', 'modality', 'is_active',
             'registration_fee_paid', 'program_name',
         ]
 
@@ -268,7 +268,7 @@ class StudentDossierSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'id', 'user', 'matricule', 'gender', 'birth_date', 'birth_place',
-            'nationality', 'address', 'city', 'site', 'site_name', 'status',
+            'nationality', 'address', 'city', 'site', 'site_name', 'status', 'modality',
             'admission_date', 'graduation_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'files', 'cards',

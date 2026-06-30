@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -724,7 +725,16 @@ class LibraryDocumentViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title', 'authors', 'abstract', 'keywords', 'isbn', 'doi']
     ordering_fields = ['title', 'year', 'download_count', 'view_count', 'created_at']
-    filterset_fields = ['doc_type', 'language', 'is_downloadable', 'is_online_readable', 'is_published', 'is_active']
+    filterset_fields = ['doc_type', 'language', 'is_downloadable', 'is_online_readable', 'is_published', 'is_active', 'site']
+
+    def get_queryset(self):
+        qs = LibraryDocument.objects.prefetch_related('subjects', 'favorites').all()
+        user = self.request.user
+        # Non-admin users only see documents shared with all sites (site=null)
+        # or rattached to their own site — never another site's library.
+        if user.is_authenticated and not (user.is_staff or user.is_superuser) and user.site_id:
+            qs = qs.filter(Q(site__isnull=True) | Q(site_id=user.site_id))
+        return qs
 
     def perform_create(self, serializer):
         serializer.save(uploaded_by=self.request.user)

@@ -354,6 +354,7 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
     doc_type_label = serializers.CharField(source='get_doc_type_display', read_only=True)
     is_favorite = serializers.SerializerMethodField()
     my_progress = serializers.SerializerMethodField()
+    site_name = serializers.CharField(source='site.name', read_only=True, default=None)
 
     class Meta:
         model = LibraryDocument
@@ -361,7 +362,7 @@ class LibraryDocumentSerializer(serializers.ModelSerializer):
             'id', 'title', 'authors', 'doc_type', 'doc_type_label',
             'year', 'isbn', 'doi', 'abstract', 'publisher', 'language',
             'pages', 'keywords', 'cover_image', 'file', 'external_url',
-            'subjects', 'subject_names',
+            'subjects', 'subject_names', 'site', 'site_name',
             'is_downloadable', 'is_online_readable', 'is_published',
             'download_count', 'view_count',
             'uploaded_by', 'is_favorite', 'my_progress',
