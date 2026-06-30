@@ -292,7 +292,8 @@ class StudentViewSet(viewsets.ModelViewSet):
                 invoice__student=student, status='PENDING', is_active=True
             ).aggregate(p=Sum('amount'))['p'] or 0
         )
-        remaining = max(0.0, total_tuition - total_paid)
+        # Use configured amount as base when no invoices exist yet
+        has_invoices = invoices.exists()
 
         # Look up FeeConfiguration — try enrollment level first, fall back to site-only
         import logging
@@ -339,8 +340,11 @@ class StudentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error('financial_summary: unexpected error: %s', e, exc_info=True)
 
+        effective_tuition = total_tuition if has_invoices else configured_tuition
+        remaining = max(0.0, effective_tuition - total_paid)
+
         return Response({
-            'tuition_fee':              total_tuition or configured_tuition,
+            'tuition_fee':              effective_tuition,
             'total_paid':               total_paid,
             'remaining_balance':        remaining,
             'total_pending':            total_pending,
@@ -348,7 +352,130 @@ class StudentViewSet(viewsets.ModelViewSet):
             'registration_fee_paid':    student.registration_fee_paid,
             'configured_tuition_fee':   configured_tuition,
             'configured_registration_fee': configured_registration,
+            'has_invoices':             has_invoices,
         })
+
+
+    @action(detail=True, methods=['post'], url_path='prepare-invoices')
+    def prepare_invoices(self, request, pk=None):
+        """Create inscription and/or scolarité invoices if they don't exist yet."""
+        import logging
+        from apps.finance.models import Invoice, InvoiceItem, FeeType, FeeConfiguration
+        from apps.finance.serializers import InvoiceListSerializer
+        from apps.core.models import AcademicYear
+        from datetime import date, timedelta
+
+        logger = logging.getLogger(__name__)
+        student = self.get_object()
+
+        try:
+            # Use current year, fall back to most recent
+            current_year = AcademicYear.get_current()
+            if not current_year:
+                current_year = AcademicYear.objects.filter(is_active=True).order_by('-start_date').first()
+            if not current_year:
+                current_year = AcademicYear.objects.order_by('-start_date').first()
+            if not current_year:
+                return Response(
+                    {'detail': 'Aucune année académique trouvée. Veuillez en créer une dans l\'administration.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Site fallback
+            site = student.site
+            if not site:
+                from apps.core.models import Site
+                site = Site.objects.filter(is_active=True).first()
+            if not site:
+                return Response(
+                    {'detail': 'Aucun site trouvé pour cet étudiant.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Resolve fee amounts: FeeConfiguration → Student fields
+            enrollment_row = student.enrollments.filter(is_active=True).values_list(
+                'class_obj_id', 'academic_year_id'
+            ).first()
+            level = None
+            try:
+                if enrollment_row and enrollment_row[0]:
+                    from apps.academic.models import Class as AcademicClass
+                    class_obj = AcademicClass.objects.select_related('level').get(pk=enrollment_row[0])
+                    level = class_obj.level
+            except Exception as e:
+                logger.warning('prepare_invoices: cannot resolve level: %s', e)
+
+            fee_config = FeeConfiguration.get_for_enrollment(site, level, current_year)
+            tuition_amount = float(fee_config.tuition_fee if fee_config else (student.tuition_fee or 0))
+            reg_amount = float(fee_config.registration_fee if fee_config else (student.registration_fee or 0))
+
+            logger.info(
+                'prepare_invoices: student=%s site=%s year=%s tuition=%.0f reg=%.0f fee_config=%s',
+                student.matricule, site, current_year, tuition_amount, reg_amount, fee_config
+            )
+
+            due_date = (current_year.end_date if hasattr(current_year, 'end_date') and current_year.end_date
+                        else date.today() + timedelta(days=90))
+
+            scolarite_ft, _ = FeeType.objects.get_or_create(
+                code='SCOLARITE',
+                defaults={'name': 'Frais de scolarité', 'is_recurring': True, 'default_amount': tuition_amount}
+            )
+            inscription_ft, _ = FeeType.objects.get_or_create(
+                code='INSCRIPTION',
+                defaults={'name': "Frais d'inscription", 'is_recurring': False, 'default_amount': reg_amount}
+            )
+
+            created = 0
+
+            # Scolarité invoice
+            if tuition_amount > 0:
+                tuition_exists = Invoice.objects.filter(
+                    student=student, items__fee_type=scolarite_ft, is_active=True
+                ).exists()
+                if not tuition_exists:
+                    inv = Invoice(student=student, site=site, academic_year=current_year,
+                                  due_date=due_date, created_by=request.user)
+                    inv.save()
+                    InvoiceItem.objects.create(
+                        invoice=inv, fee_type=scolarite_ft,
+                        description=f'Frais de scolarité — {current_year.name}',
+                        quantity=1, unit_price=int(tuition_amount)
+                    )
+                    inv.save()  # recalculate totals after items
+                    created += 1
+                    logger.info('prepare_invoices: created tuition invoice %s', inv.invoice_number)
+
+            # Inscription invoice (only if not already paid)
+            if reg_amount > 0 and not student.registration_fee_paid:
+                reg_exists = Invoice.objects.filter(
+                    student=student, items__fee_type=inscription_ft, is_active=True
+                ).exists()
+                if not reg_exists:
+                    inv = Invoice(student=student, site=site, academic_year=current_year,
+                                  due_date=due_date, created_by=request.user)
+                    inv.save()
+                    InvoiceItem.objects.create(
+                        invoice=inv, fee_type=inscription_ft,
+                        description=f"Frais d'inscription — {current_year.name}",
+                        quantity=1, unit_price=int(reg_amount)
+                    )
+                    inv.save()  # recalculate totals after items
+                    created += 1
+                    logger.info('prepare_invoices: created registration invoice %s', inv.invoice_number)
+
+            all_invoices = Invoice.objects.filter(
+                student=student, is_active=True
+            ).prefetch_related('items__fee_type', 'payments')
+            serializer = InvoiceListSerializer(all_invoices, many=True)
+            return Response({'created': created, 'invoices': serializer.data})
+
+        except Exception as e:
+            logger.error('prepare_invoices: unexpected error for student %s: %s', pk, e, exc_info=True)
+            return Response(
+                {'detail': f'Erreur serveur : {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class StudentFileViewSet(viewsets.ModelViewSet):
