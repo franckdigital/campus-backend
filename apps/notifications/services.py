@@ -169,7 +169,7 @@ def dispatch_notification(notification, channels=None, force_channels=None):
             prefs = notification.recipient.notification_preferences
             active = prefs.active_channels()
         except NotificationPreference.DoesNotExist:
-            active = ['IN_APP', 'EMAIL']
+            active = ['IN_APP', 'PUSH']
 
     prefs = None
     try:
@@ -240,26 +240,26 @@ def notify_payment_validated(payment):
     n = Notification.send(
         recipient=student.user,
         notification_type='PAYMENT',
-        title='Paiement validé',
-        message=f'Votre paiement de {amount} FCFA a été validé (facture {inv_no}).',
-        data={'payment_id': str(payment.id), 'invoice_id': str(payment.invoice.id)},
+        title='✅ Paiement confirmé',
+        message=f'Votre paiement de {int(amount):,} FCFA a été validé (facture {inv_no}).'.replace(',', ' '),
+        data={'payment_id': str(payment.id), 'invoice_id': str(payment.invoice.id), 'type': 'PAYMENT'},
         action_url=f'/payments/{payment.id}',
         site=payment.invoice.site,
     )
-    dispatch_notification(n)
+    dispatch_notification(n, channels=['IN_APP', 'PUSH'])
 
     # Notify parents
     for parent_user in _get_student_parents(student):
         n = Notification.send(
             recipient=parent_user,
             notification_type='PAYMENT',
-            title='Paiement validé',
-            message=f'Un paiement de {amount} FCFA a été validé pour {student.user.full_name} (facture {inv_no}).',
-            data={'payment_id': str(payment.id), 'student_id': str(student.id)},
+            title='✅ Paiement reçu',
+            message=f'Paiement de {int(amount):,} FCFA validé pour {student.user.full_name} (facture {inv_no}).'.replace(',', ' '),
+            data={'payment_id': str(payment.id), 'student_id': str(student.id), 'type': 'PAYMENT'},
             priority='HIGH',
             site=payment.invoice.site,
         )
-        dispatch_notification(n)
+        dispatch_notification(n, channels=['IN_APP', 'PUSH'])
 
 
 # kept for backward-compat
@@ -278,7 +278,7 @@ def notify_absence_recorded(attendance_record):
             recipient=parent_user,
             notification_type='ABSENCE',
             priority='HIGH',
-            title='Absence signalée',
+            title='⚠️ Absence signalée',
             message=(
                 f'{student.user.full_name} a été marqué(e) absent(e) '
                 f'en {subject_name} le {date_str}.'
@@ -288,9 +288,10 @@ def notify_absence_recorded(attendance_record):
                 'session_id': str(session.id),
                 'date': date_str,
                 'status': 'ABSENT',
+                'type': 'ABSENCE',
             },
         )
-        dispatch_notification(n)
+        dispatch_notification(n, channels=['IN_APP', 'PUSH'])
 
 
 # kept for backward-compat
