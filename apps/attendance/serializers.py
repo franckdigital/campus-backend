@@ -8,12 +8,36 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
     marked_by_name = serializers.CharField(source='marked_by.full_name', read_only=True)
     date = serializers.DateField(source='attendance_session.date', read_only=True)
     subject_name = serializers.CharField(source='attendance_session.session.subject.name', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    room_name = serializers.SerializerMethodField()
+    start_time = serializers.SerializerMethodField()
+
+    def get_teacher_name(self, obj):
+        try:
+            return obj.attendance_session.session.teacher.user.full_name
+        except Exception:
+            return None
+
+    def get_room_name(self, obj):
+        try:
+            room = obj.attendance_session.session.room
+            return room.name if room else None
+        except Exception:
+            return None
+
+    def get_start_time(self, obj):
+        try:
+            t = obj.attendance_session.session.start_time
+            return str(t)[:5] if t else None  # "HH:MM"
+        except Exception:
+            return None
 
     class Meta:
         model = AttendanceRecord
         fields = [
             'id', 'attendance_session', 'student', 'student_name', 'student_matricule',
-            'status', 'date', 'subject_name', 'check_in_time', 'check_in_method', 'notes',
+            'status', 'date', 'subject_name', 'teacher_name', 'room_name', 'start_time',
+            'check_in_time', 'check_in_method', 'notes',
             'marked_by', 'marked_by_name', 'is_active', 'created_at'
         ]
         read_only_fields = ['id', 'check_in_time', 'created_at']

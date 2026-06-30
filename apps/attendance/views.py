@@ -209,6 +209,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
     queryset = AttendanceRecord.objects.select_related(
         'attendance_session__session__subject',
         'attendance_session__session__class_obj',
+        'attendance_session__session__teacher__user',
+        'attendance_session__session__room',
         'student__user', 'marked_by'
     ).all()
     serializer_class = AttendanceRecordSerializer
