@@ -287,6 +287,17 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         total_tuition  = float(invoices.aggregate(t=Sum('total'))['t']       or 0)
         total_paid     = float(invoices.aggregate(p=Sum('amount_paid'))['p'] or 0)
+
+        # Separate tuition-only vs inscription totals using fee_type codes
+        inscription_invoice_ids = list(
+            invoices.filter(items__fee_type__code__iregex=r'inscri|reg')
+            .distinct().values_list('id', flat=True)
+        )
+        total_registration_invoiced = float(
+            invoices.filter(id__in=inscription_invoice_ids)
+            .aggregate(t=Sum('total'))['t'] or 0
+        )
+        total_tuition_only = total_tuition - total_registration_invoiced
         total_pending  = float(
             Payment.objects.filter(
                 invoice__student=student, status='PENDING', is_active=True
@@ -340,11 +351,15 @@ class StudentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error('financial_summary: unexpected error: %s', e, exc_info=True)
 
-        effective_tuition = total_tuition if has_invoices else configured_tuition
+        # Grand total (scolarité + inscription)
+        effective_tuition = total_tuition if has_invoices else (configured_tuition + configured_registration)
+        # Tuition only (scolarité, sans inscription)
+        effective_tuition_only = total_tuition_only if has_invoices else configured_tuition
         remaining = max(0.0, effective_tuition - total_paid)
 
         return Response({
-            'tuition_fee':              effective_tuition,
+            'tuition_fee':              effective_tuition,           # total all fees
+            'tuition_fee_only':         effective_tuition_only,      # scolarité only
             'total_paid':               total_paid,
             'remaining_balance':        remaining,
             'total_pending':            total_pending,
