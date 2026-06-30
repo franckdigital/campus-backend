@@ -301,10 +301,12 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         # Registration paid = student flag OR inscription invoice fully paid (balance = 0)
         reg_balance = float(inscription_qs.aggregate(b=Sum('balance'))['b'] or 0) if inscription_invoice_ids else None
-        registration_fee_paid = (
-            student.registration_fee_paid
-            or (reg_balance is not None and reg_balance <= 0)
-        )
+        dynamic_reg_paid = reg_balance is not None and reg_balance <= 0
+        registration_fee_paid = student.registration_fee_paid or dynamic_reg_paid
+
+        # Auto-sync the student flag so getMe() stays consistent
+        if dynamic_reg_paid and not student.registration_fee_paid:
+            Student.objects.filter(pk=student.pk).update(registration_fee_paid=True)
 
         total_pending  = float(
             Payment.objects.filter(
