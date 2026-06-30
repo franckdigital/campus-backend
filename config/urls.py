@@ -35,6 +35,11 @@ urlpatterns = [
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]
 
-if settings.DEBUG:
+# Les fichiers media (PDF, vidéos, images uploadés) doivent être servis même
+# hors DEBUG tant qu'aucun stockage S3/CDN n'est configuré (USE_S3=False),
+# sinon les liens de téléchargement renvoient une 404 en production.
+if not settings.USE_S3:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

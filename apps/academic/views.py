@@ -51,6 +51,15 @@ class LevelViewSet(viewsets.ModelViewSet):
     ordering_fields = ['order', 'name']
     filterset_fields = ['program', 'is_active']
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        p = self.request.query_params
+        site_id = p.get('site_id') or p.get('site') or p.get('program__site')
+        if site_id:
+            # Level has no direct site FK — site is reachable only via program.site
+            queryset = queryset.filter(program__site_id=site_id)
+        return queryset
+
 
 class SubjectViewSet(viewsets.ModelViewSet):
     queryset = Subject.objects.all()
