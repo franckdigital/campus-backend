@@ -48,7 +48,7 @@ class Command(BaseCommand):
             pm = p.payment_method
             student = p.invoice.student
             self.stdout.write(
-                f"  {str(p.id)[:8]} | {p.amount:>10} FCFA | pm={pm.code if pm else '?':20} | site={site.code if site else '?'} | etudiant={student.user.get_full_name() if student else '?'} | {p.created_at:%Y-%m-%d %H:%M}"
+                f"  {str(p.id)[:8]} | {p.amount:>10} FCFA | pm={pm.code if pm else '?':20} | site={site.code if site else '?'} | etudiant={student.user.full_name if student else '?'} | {p.created_at:%Y-%m-%d %H:%M}"
             )
 
         if options['fix'] and count > 0:
@@ -68,7 +68,7 @@ class Command(BaseCommand):
                 is_inscription = inv.items.filter(fee_type__code__iregex=r'inscri|reg').exists()
                 fee_label = "Frais d'inscription" if is_inscription else "Frais de scolarité"
                 try:
-                    student_name = inv.student.user.get_full_name() or str(inv.student)
+                    student_name = inv.student.user.full_name or str(inv.student)
                 except Exception:
                     student_name = ''
                 ref_date = p.created_at.strftime('%Y%m%d') if p.created_at else '00000000'

@@ -158,7 +158,7 @@ def on_payment_save(sender, instance, created, **kwargs):
             fee_type__code__iregex=r'inscri|reg'
         ).exists()
         fee_label = "Frais d'inscription" if is_inscription else "Frais de scolarité"
-        student_name = student.user.get_full_name() or str(student)
+        student_name = student.user.full_name or str(student)
         description = f"{fee_label} — {student_name} (facture {inv.invoice_number})"
 
         ref_date = instance.created_at.strftime('%Y%m%d') if instance.created_at else ''

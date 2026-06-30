@@ -52,7 +52,7 @@ class Command(BaseCommand):
             is_inscription = inv.items.filter(fee_type__code__iregex=r'inscri|reg').exists()
             fee_label = "Frais d'inscription" if is_inscription else "Frais de scolarité"
             try:
-                student_name = inv.student.user.get_full_name() or str(inv.student)
+                student_name = inv.student.user.full_name or str(inv.student)
             except Exception:
                 student_name = ''
 
