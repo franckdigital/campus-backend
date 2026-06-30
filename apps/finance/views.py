@@ -576,16 +576,13 @@ class CashSessionOpenView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        if cash_register.is_open:
-            existing_session = CashSession.objects.filter(
-                cash_register=cash_register,
-                status='OPEN'
-            ).first()
-            if existing_session:
-                return Response(
-                    {'detail': 'Une session est déjà ouverte', 'session': CashSessionSerializer(existing_session).data},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        existing_session = CashSession.objects.filter(
+            cash_register=cash_register,
+            status='OPEN'
+        ).first()
+        if existing_session:
+            # Return existing open session instead of error — idempotent auto-open
+            return Response(CashSessionSerializer(existing_session).data, status=status.HTTP_200_OK)
         
         from decimal import Decimal
         session = CashSession.objects.create(
