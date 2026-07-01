@@ -17,6 +17,7 @@ from .models import (
     VideoLibrary, VideoSubtitle, VideoProgress, VideoDownloadToken,
     VirtualClassroom, ClassroomPoll, PollResponse, ClassroomChatMessage, HandRaise,
     ExamSnapshot,
+    Course, CourseSection, CourseChapter, CourseLesson,
 )
 from .serializers import (
     ZoomMeetingSerializer, LessonSerializer, LessonListSerializer,
@@ -35,6 +36,8 @@ from .serializers import (
     VideoLibrarySerializer, VideoSubtitleSerializer, VideoProgressSerializer,
     VirtualClassroomSerializer, ClassroomPollSerializer, PollResponseSerializer,
     ClassroomChatMessageSerializer, HandRaiseSerializer, AITranscriptSerializer,
+    CourseSerializer, CourseListSerializer,
+    CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
 from .services import ZoomService
 from apps.academic.models import Session
@@ -1428,3 +1431,71 @@ class VirtualClassroomViewSet(viewsets.ModelViewSet):
         classroom.ai_summary = summary
         classroom.save()
         return Response({'ai_summary': summary, 'tokens_used': tokens})
+
+
+# ── Cours autonomes ──────────────────────────────────────────────────────────
+
+class CourseViewSet(viewsets.ModelViewSet):
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields   = ['title', 'subtitle', 'description']
+    ordering_fields = ['created_at', 'title', 'status', 'total_students', 'average_rating']
+    filterset_fields = ['site', 'status', 'level', 'is_free', 'is_active']
+
+    def get_queryset(self):
+        return Course.objects.select_related('site', 'instructor').prefetch_related(
+            'sections__chapters__lessons'
+        ).filter(is_active=True)
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return CourseListSerializer
+        return CourseSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(instructor=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        instance = self.get_object()
+        # Handle multipart (thumbnail upload)
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(CourseSerializer(instance, context={'request': request}).data)
+
+
+class CourseSectionViewSet(viewsets.ModelViewSet):
+    serializer_class = CourseSectionSerializer
+    filter_backends  = [DjangoFilterBackend]
+    filterset_fields = ['course', 'is_active']
+
+    def get_queryset(self):
+        return CourseSection.objects.prefetch_related('chapters__lessons').filter(is_active=True)
+
+
+class CourseChapterViewSet(viewsets.ModelViewSet):
+    serializer_class = CourseChapterSerializer
+    filter_backends  = [DjangoFilterBackend]
+    filterset_fields = ['section', 'is_active']
+
+    def get_queryset(self):
+        return CourseChapter.objects.prefetch_related('lessons').filter(is_active=True)
+
+
+class CourseLessonViewSet(viewsets.ModelViewSet):
+    serializer_class = CourseLessonSerializer
+    filter_backends  = [DjangoFilterBackend]
+    filterset_fields = ['chapter', 'content_type', 'is_active']
+
+    def get_queryset(self):
+        return CourseLesson.objects.filter(is_active=True)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return super().update(request, *args, **kwargs)

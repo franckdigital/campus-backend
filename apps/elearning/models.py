@@ -327,6 +327,7 @@ class Question(BaseModel):
     QUESTION_TYPE_CHOICES = [
         ('QCU', 'Choix unique'),
         ('QCM', 'Choix multiple'),
+        ('TRUEFALSE', 'Vrai ou Faux'),
         ('TEXT', 'Texte libre'),
         ('NUMERIC', 'Calcul / Numérique'),
         ('MATCHING', 'Association'),
@@ -495,6 +496,12 @@ class AttemptAnswer(BaseModel):
             self.is_correct = correct_count == total
             self.points_earned = (points * correct_count / total).quantize(Decimal('0.01'))
 
+        elif q.question_type == 'TRUEFALSE':
+            correct_ids = set(q.choices.filter(is_correct=True).values_list('id', flat=True))
+            selected_ids = set(self.selected_choices.values_list('id', flat=True))
+            self.is_correct = selected_ids == correct_ids and len(selected_ids) == 1
+            self.points_earned = points if self.is_correct else Decimal('0')
+
         self.save()
         return self.is_correct
 
@@ -545,6 +552,18 @@ class Assignment(BaseModel):
     late_penalty_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     
     attachment = models.FileField(upload_to='assignments/', blank=True, null=True)
+
+    # Composition en ligne : quiz lié pour exercices auto-corrigés
+    quiz = models.OneToOneField(
+        'Quiz', on_delete=models.SET_NULL, null=True, blank=True, related_name='assignment'
+    )
+    # Liens contextuels optionnels
+    course = models.ForeignKey(
+        'Course', on_delete=models.SET_NULL, null=True, blank=True, related_name='course_assignments'
+    )
+    virtual_classroom = models.ForeignKey(
+        'VirtualClassroom', on_delete=models.SET_NULL, null=True, blank=True, related_name='classroom_assignments'
+    )
 
     class Meta:
         db_table = 'assignments'
@@ -1287,3 +1306,121 @@ class HandRaise(BaseModel):
     def __str__(self):
         status = 'levée' if self.is_raised else 'baissée'
         return f"{self.student.matricule} ({status})"
+
+
+# ── Cours autonomes (type MOOC / formation structurée) ──────────────────────
+
+COURSE_LEVEL_CHOICES = [
+    ('beginner',     'Débutant'),
+    ('intermediate', 'Intermédiaire'),
+    ('advanced',     'Avancé'),
+    ('all_levels',   'Tous niveaux'),
+]
+
+COURSE_STATUS_CHOICES = [
+    ('draft',     'Brouillon'),
+    ('published', 'Publié'),
+    ('archived',  'Archivé'),
+]
+
+COURSE_CONTENT_TYPE_CHOICES = [
+    ('video',   'Vidéo'),
+    ('audio',   'Audio'),
+    ('pdf',     'PDF'),
+    ('ppt',     'PowerPoint'),
+    ('word',    'Word'),
+    ('image',   'Image'),
+    ('text',    'Texte'),
+    ('youtube', 'YouTube'),
+    ('vimeo',   'Vimeo'),
+    ('iframe',  'Iframe'),
+    ('html5',   'HTML5'),
+]
+
+
+class Course(BaseModel):
+    """Cours autonome structuré (Sections → Chapitres → Leçons)."""
+    site       = models.ForeignKey('core.Site', on_delete=models.SET_NULL, null=True, blank=True, related_name='courses')
+    instructor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='courses_taught')
+    title      = models.CharField(max_length=255)
+    subtitle   = models.CharField(max_length=500, blank=True)
+    description         = models.TextField(blank=True)
+    thumbnail           = models.ImageField(upload_to='courses/thumbnails/', null=True, blank=True)
+    level               = models.CharField(max_length=20, choices=COURSE_LEVEL_CHOICES, default='all_levels')
+    language            = models.CharField(max_length=50, default='Français')
+    status              = models.CharField(max_length=20, choices=COURSE_STATUS_CHOICES, default='draft')
+    price               = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_free             = models.BooleanField(default=True)
+    certificate_enabled = models.BooleanField(default=False)
+    target_audience     = models.TextField(blank=True)
+    requirements        = models.JSONField(default=list, blank=True)
+    what_you_will_learn = models.JSONField(default=list, blank=True)
+    total_students      = models.PositiveIntegerField(default=0)
+    average_rating      = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = 'courses'
+        verbose_name = 'Cours'
+        verbose_name_plural = 'Cours'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
+
+
+class CourseSection(BaseModel):
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='sections')
+    title  = models.CharField(max_length=255)
+    order  = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'course_sections'
+        verbose_name = 'Section de cours'
+        verbose_name_plural = 'Sections de cours'
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.course.title} — {self.title}"
+
+
+class CourseChapter(BaseModel):
+    section     = models.ForeignKey(CourseSection, on_delete=models.CASCADE, related_name='chapters')
+    title       = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    order       = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'course_chapters'
+        verbose_name = 'Chapitre de cours'
+        verbose_name_plural = 'Chapitres de cours'
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.section.title} — {self.title}"
+
+
+class CourseLesson(BaseModel):
+    chapter           = models.ForeignKey(CourseChapter, on_delete=models.CASCADE, related_name='lessons')
+    title             = models.CharField(max_length=255)
+    content_type      = models.CharField(max_length=20, choices=COURSE_CONTENT_TYPE_CHOICES, default='video')
+    duration_seconds  = models.PositiveIntegerField(default=0)
+    is_preview_free   = models.BooleanField(default=False)
+    download_allowed  = models.BooleanField(default=False)
+    text_content      = models.TextField(blank=True)
+    external_embed_url = models.URLField(blank=True)
+    video_file        = models.FileField(upload_to='courses/videos/', null=True, blank=True)
+    document_file     = models.FileField(upload_to='courses/documents/', null=True, blank=True)
+    order             = models.PositiveIntegerField(default=0)
+
+    @property
+    def has_media(self):
+        return bool(self.video_file or self.document_file)
+
+    class Meta:
+        db_table = 'course_lessons'
+        verbose_name = 'Leçon de cours'
+        verbose_name_plural = 'Leçons de cours'
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.chapter.title} — {self.title}"

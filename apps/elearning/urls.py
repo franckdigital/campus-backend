@@ -12,6 +12,7 @@ from .views import (
     AIConversationViewSet, AIGenerateView, AIGradeView,
     VideoLibraryViewSet,
     VirtualClassroomViewSet,
+    CourseViewSet, CourseSectionViewSet, CourseChapterViewSet, CourseLessonViewSet,
 )
 
 router = DefaultRouter()
@@ -38,6 +39,11 @@ router.register(r'ai-conversations', AIConversationViewSet, basename='ai-convers
 router.register(r'videos', VideoLibraryViewSet, basename='video')
 # Lot 8 — Classes virtuelles
 router.register(r'classrooms', VirtualClassroomViewSet, basename='classroom')
+# Cours autonomes
+router.register(r'courses', CourseViewSet, basename='course')
+router.register(r'course-sections', CourseSectionViewSet, basename='course-section')
+router.register(r'course-chapters', CourseChapterViewSet, basename='course-chapter')
+router.register(r'course-lessons', CourseLessonViewSet, basename='course-lesson')
 
 urlpatterns = [
     path('elearning/zoom/create-meeting/', CreateZoomMeetingView.as_view(), name='zoom-create-meeting'),

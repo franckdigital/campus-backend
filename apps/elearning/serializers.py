@@ -9,6 +9,7 @@ from .models import (
     AIConversation, AIMessage,
     VideoLibrary, VideoSubtitle, VideoProgress, VideoDownloadToken,
     VirtualClassroom, ClassroomPoll, PollResponse, ClassroomChatMessage, HandRaise,
+    Course, CourseSection, CourseChapter, CourseLesson,
 )
 
 
@@ -759,3 +760,100 @@ class VirtualClassroomSerializer(serializers.ModelSerializer):
 class AITranscriptSerializer(serializers.Serializer):
     transcript = serializers.CharField()
     classroom_id = serializers.UUIDField()
+
+
+# ── Cours autonomes ──────────────────────────────────────────────────────────
+
+class CourseLessonSerializer(serializers.ModelSerializer):
+    has_media = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = CourseLesson
+        fields = [
+            'id', 'chapter', 'title', 'content_type', 'duration_seconds',
+            'is_preview_free', 'download_allowed', 'text_content',
+            'external_embed_url', 'video_file', 'document_file',
+            'has_media', 'order', 'is_active', 'created_at',
+        ]
+        read_only_fields = ['id', 'has_media', 'created_at']
+
+
+class CourseChapterSerializer(serializers.ModelSerializer):
+    lessons = CourseLessonSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CourseChapter
+        fields = ['id', 'section', 'title', 'description', 'order', 'lessons', 'is_active', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class CourseSectionSerializer(serializers.ModelSerializer):
+    chapters = CourseChapterSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CourseSection
+        fields = ['id', 'course', 'title', 'order', 'chapters', 'is_active', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class CourseSerializer(serializers.ModelSerializer):
+    sections       = CourseSectionSerializer(many=True, read_only=True)
+    instructor_name = serializers.SerializerMethodField()
+    thumbnail_url  = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Course
+        fields = [
+            'id', 'site', 'instructor', 'instructor_name',
+            'title', 'subtitle', 'description', 'thumbnail', 'thumbnail_url',
+            'level', 'language', 'status',
+            'price', 'is_free', 'certificate_enabled',
+            'target_audience', 'requirements', 'what_you_will_learn',
+            'total_students', 'average_rating',
+            'sections', 'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'total_students', 'average_rating', 'created_at', 'updated_at']
+
+    def get_instructor_name(self, obj):
+        if obj.instructor:
+            return f"{obj.instructor.first_name} {obj.instructor.last_name}".strip() or obj.instructor.email
+        return None
+
+    def get_thumbnail_url(self, obj):
+        if obj.thumbnail:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.thumbnail.url)
+            return obj.thumbnail.url
+        return None
+
+
+class CourseListSerializer(serializers.ModelSerializer):
+    instructor_name = serializers.SerializerMethodField()
+    thumbnail_url   = serializers.SerializerMethodField()
+    section_count   = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Course
+        fields = [
+            'id', 'title', 'subtitle', 'thumbnail_url', 'level', 'status',
+            'price', 'is_free', 'average_rating', 'total_students',
+            'instructor', 'instructor_name', 'section_count',
+            'certificate_enabled', 'is_active', 'created_at',
+        ]
+
+    def get_instructor_name(self, obj):
+        if obj.instructor:
+            return f"{obj.instructor.first_name} {obj.instructor.last_name}".strip() or obj.instructor.email
+        return None
+
+    def get_thumbnail_url(self, obj):
+        if obj.thumbnail:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.thumbnail.url)
+            return obj.thumbnail.url
+        return None
+
+    def get_section_count(self, obj):
+        return obj.sections.filter(is_active=True).count()
