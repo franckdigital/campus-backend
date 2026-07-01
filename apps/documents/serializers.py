@@ -58,6 +58,11 @@ class DocumentUploadSerializer(serializers.ModelSerializer):
             'title', 'description', 'category', 'site', 'academic_year',
             'student', 'file', 'tags', 'metadata'
         ]
+        extra_kwargs = {
+            'category':      {'required': False},
+            'site':          {'required': False},
+            'academic_year': {'required': False},
+        }
 
 
 class ArchiveDocumentSerializer(serializers.ModelSerializer):

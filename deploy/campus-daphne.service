@@ -1,7 +1,7 @@
 [Unit]
 Description=Campus Daphne daemon (WebSocket)
-After=network.target mysql.service redis.service
-Requires=redis.service
+After=network.target mysql.service redis.service campus-mobile-money-init.service
+Requires=redis.service campus-mobile-money-init.service
 
 [Service]
 User=www-data

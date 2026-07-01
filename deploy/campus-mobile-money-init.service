@@ -1,0 +1,18 @@
+[Unit]
+Description=Campus – ensure Mobile Money cash session exists
+After=network.target mysql.service
+Requires=mysql.service
+Before=campus-gunicorn.service campus-daphne.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/campus-backend
+Environment="PATH=/var/www/campus-backend/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=config.settings"
+ExecStart=/var/www/campus-backend/venv/bin/python manage.py ensure_mobile_money_session
+
+[Install]
+WantedBy=multi-user.target

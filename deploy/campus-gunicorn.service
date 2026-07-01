@@ -1,7 +1,7 @@
 [Unit]
 Description=Campus Gunicorn daemon (HTTP)
-After=network.target mysql.service redis.service
-Requires=mysql.service
+After=network.target mysql.service redis.service campus-mobile-money-init.service
+Requires=mysql.service campus-mobile-money-init.service
 
 [Service]
 User=www-data

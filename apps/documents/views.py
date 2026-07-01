@@ -38,9 +38,61 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return DocumentSerializer
 
     def perform_create(self, serializer):
-        category = serializer.validated_data.get('category')
-        initial_status = 'PENDING' if category.requires_validation else 'VALIDATED'
-        serializer.save(uploaded_by=self.request.user, status=initial_status)
+        data = serializer.validated_data
+
+        # Infer site from student when not explicitly provided
+        site = data.get('site')
+        student = data.get('student')
+        if not site and student:
+            site = getattr(student, 'site', None)
+
+        # Infer academic_year from student's active enrollment when not provided
+        academic_year = data.get('academic_year')
+        if not academic_year and student:
+            try:
+                from apps.academic.models import Enrollment
+                enrollment = (
+                    Enrollment.objects
+                    .filter(student=student, is_active=True)
+                    .select_related('academic_year')
+                    .first()
+                )
+                if enrollment:
+                    academic_year = enrollment.academic_year
+            except Exception:
+                pass
+
+        # Resolve category: use explicit FK or find/create from document_type code
+        category = data.get('category')
+        if not category:
+            doc_type = self.request.data.get('document_type', 'OTHER')
+            type_labels = {
+                'ID_CARD':         "Carte d'identité",
+                'PASSPORT':        'Passeport',
+                'BIRTH_CERTIFICATE': 'Acte de naissance',
+                'DIPLOMA':         'Diplôme',
+                'TRANSCRIPT':      'Relevé de notes',
+                'REPORT_CARD':     'Bulletin scolaire',
+                'CERTIFICATE':     'Certificat',
+                'ATTESTATION':     'Attestation',
+                'PHOTO':           'Photo',
+                'MEDICAL':         'Document médical',
+                'OTHER':           'Autre',
+            }
+            label = type_labels.get(doc_type, doc_type or 'Autre')
+            category, _ = DocumentCategory.objects.get_or_create(
+                code=doc_type or 'OTHER',
+                defaults={'name': label, 'is_active': True, 'requires_validation': False},
+            )
+
+        initial_status = 'PENDING' if (category and category.requires_validation) else 'VALIDATED'
+        serializer.save(
+            uploaded_by=self.request.user,
+            status=initial_status,
+            site=site,
+            academic_year=academic_year,
+            category=category,
+        )
 
     @action(detail=True, methods=['post'])
     def validate(self, request, pk=None):

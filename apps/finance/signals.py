@@ -1,5 +1,6 @@
 import logging
 from decimal import Decimal
+from django.db.models import Sum
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from .models import Payment
@@ -10,23 +11,28 @@ logger = logging.getLogger(__name__)
 def _get_or_create_open_session(site, payment_method=None):
     """
     Return an open CashSession for the site.
-    If none exists, auto-create one (opening_balance=0) on the best matching
-    cash register (Mobile Money for online/CinetPay, Espèces otherwise).
-    Returns None if no cash register is configured for the site.
+    For online/Mobile Money payments: always use the dedicated Mobile Money register,
+    auto-creating it if missing. Never fall back to the cash register for online payments.
+    For cash payments: use the first active register.
     """
     from .models import CashRegister, CashSession
     from django.contrib.auth import get_user_model
+    from django.db.models import Q
 
     if not site:
         return None
 
-    # Choose the most appropriate cash register
     code_upper = (getattr(payment_method, 'code', '') or '').upper()
     is_online = any(k in code_upper for k in ('MOBILE', 'CINETPAY', 'MTN', 'ORANGE', 'WAVE', 'FLOOZ', 'MOOV'))
 
-    cash_register = None
+    User = get_user_model()
+    system_user = (
+        User.objects.filter(is_superuser=True, is_active=True).first()
+        or User.objects.filter(is_staff=True, is_active=True).first()
+    )
+
     if is_online:
-        from django.db.models import Q
+        # Find existing Mobile Money register
         cash_register = (
             CashRegister.objects
             .filter(site=site, is_active=True)
@@ -36,16 +42,32 @@ def _get_or_create_open_session(site, payment_method=None):
             )
             .first()
         )
-        logger.info(
-            "_get_or_create_open_session: site=%s is_online=True → register=%s",
-            site, cash_register.name if cash_register else 'NONE',
-        )
-    if not cash_register:
-        # Fallback: first active register for this site
-        cash_register = CashRegister.objects.filter(site=site, is_active=True).first()
+        # Auto-create the Mobile Money register if it doesn't exist — makes it permanent
+        if not cash_register:
+            cash_register = CashRegister.objects.create(
+                site=site,
+                name='Caisse Mobile Money',
+                code='MOBILE_MONEY',
+                is_active=True,
+                current_balance=Decimal('0'),
+            )
+            logger.info(
+                "Auto-created Mobile Money cash register for site '%s'", site,
+            )
+    else:
+        cash_register = CashRegister.objects.filter(site=site, is_active=True).exclude(
+            Q(code__iregex=r'mobile|mm|cinetpay|wave|momo') |
+            Q(name__iregex=r'mobile|cinetpay|wave|momo')
+        ).first() or CashRegister.objects.filter(site=site, is_active=True).first()
 
     if not cash_register:
+        logger.warning("_get_or_create_open_session: no cash register found for site %s", site)
         return None
+
+    logger.info(
+        "_get_or_create_open_session: site=%s is_online=%s → register='%s'",
+        site, is_online, cash_register.name,
+    )
 
     # Return existing open session
     open_session = CashSession.objects.filter(
@@ -56,12 +78,7 @@ def _get_or_create_open_session(site, payment_method=None):
     if open_session:
         return open_session
 
-    # Auto-create a session — use first superuser as opener
-    User = get_user_model()
-    system_user = (
-        User.objects.filter(is_superuser=True, is_active=True).first()
-        or User.objects.filter(is_staff=True, is_active=True).first()
-    )
+    # No open session: auto-create one carrying forward the current balance
     if not system_user:
         logger.warning("_get_or_create_open_session: no staff user found for auto-session")
         return None
@@ -69,15 +86,15 @@ def _get_or_create_open_session(site, payment_method=None):
     session = CashSession.objects.create(
         cash_register=cash_register,
         opened_by=system_user,
-        opening_balance=Decimal('0'),
+        opening_balance=cash_register.current_balance,
         notes='Session automatique (paiement reçu)',
     )
     cash_register.is_open = True
     cash_register.save(update_fields=['is_open'])
 
     logger.info(
-        "Auto-created cash session %s on register '%s' for site '%s'",
-        session.id, cash_register.name, site,
+        "Auto-created cash session %s on register '%s' for site '%s' (balance=%s)",
+        session.id, cash_register.name, site, cash_register.current_balance,
     )
     return session
 
@@ -154,4 +171,25 @@ def on_payment_save(sender, instance, created, **kwargs):
         logger.error(
             "Auto cash transaction failed for payment %s: %s",
             instance.id, exc, exc_info=True,
+        )
+
+    # ── Sync invoice amount_paid from all SUCCESS payments (idempotent safety net) ──
+    try:
+        invoice = instance.invoice
+        invoice.refresh_from_db()
+        total_success = (
+            Payment.objects.filter(invoice=invoice, status='SUCCESS')
+            .aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        )
+        if invoice.amount_paid != total_success:
+            invoice.amount_paid = total_success
+            invoice.calculate_totals()
+            invoice.save(update_fields=['amount_paid', 'balance', 'status', 'subtotal', 'total'])
+            logger.info(
+                "Invoice %s amount_paid synced to %s FCFA (was %s)",
+                invoice.invoice_number, total_success, invoice.amount_paid,
+            )
+    except Exception as exc:
+        logger.error(
+            "Invoice sync failed for payment %s: %s", instance.id, exc, exc_info=True,
         )
