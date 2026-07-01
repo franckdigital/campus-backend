@@ -35,7 +35,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from apps.finance.models import CashRegister, CashSession
-        from apps.sites.models import Site
+        from apps.core.models import Site
 
         User = get_user_model()
         system_user = (
