@@ -1,3 +1,7 @@
+import mimetypes
+import os
+
+from django.http import FileResponse, Http404
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -93,6 +97,24 @@ class DocumentViewSet(viewsets.ModelViewSet):
             academic_year=academic_year,
             category=category,
         )
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        document = self.get_object()
+        if not document.file:
+            raise Http404
+        file_path = document.file.path
+        if not os.path.exists(file_path):
+            raise Http404
+        mime_type, _ = mimetypes.guess_type(file_path)
+        response = FileResponse(
+            open(file_path, 'rb'),
+            content_type=mime_type or 'application/octet-stream',
+        )
+        response['Content-Disposition'] = (
+            f'attachment; filename="{document.file_name or os.path.basename(file_path)}"'
+        )
+        return response
 
     @action(detail=True, methods=['post'])
     def validate(self, request, pk=None):
