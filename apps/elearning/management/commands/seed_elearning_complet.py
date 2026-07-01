@@ -830,7 +830,7 @@ class Command(BaseCommand):
                 sub = AssignmentSubmission.objects.create(
                     assignment=assignment,
                     student=student,
-                    content=f'Rapport rédigé par {student.user.get_full_name() or student.matricule}. '
+                    content=f'Rapport rédigé par {student.user.full_name or student.matricule}. '
                             f'Ce devoir porte sur {subject.name} et présente une analyse approfondie du sujet.',
                 )
                 stats['submissions'] += 1
@@ -988,7 +988,7 @@ class Command(BaseCommand):
             sub = LabSubmission.objects.create(
                 lab=lab, student=student,
                 status=sub_status,
-                report_text=f'Compte-rendu du laboratoire par {student.user.get_full_name() or student.matricule}. '
+                report_text=f'Compte-rendu du laboratoire par {student.user.full_name or student.matricule}. '
                             f'Protocole suivi étape par étape. Résultats conformes aux attentes.',
                 submitted_at=now - timedelta(days=si + 1) if sub_status in ('SUBMITTED', 'GRADED') else None,
             )
@@ -1189,7 +1189,7 @@ class Command(BaseCommand):
                 conv = AIConversation.objects.create(
                     user=student.user,
                     conv_type=conv_type,
-                    title=f'{conv_type} — {student.user.get_full_name() or student.matricule}',
+                    title=f'{conv_type} — {student.user.full_name or student.matricule}',
                 )
                 user_msg, asst_msg = qa_pair
                 AIMessage.objects.create(conversation=conv, role='user', content=user_msg)
@@ -1205,7 +1205,7 @@ class Command(BaseCommand):
                 conv = AIConversation.objects.create(
                     user=teacher,
                     conv_type=conv_type,
-                    title=f'Assistant {conv_type} — {teacher.get_full_name() or teacher.email}',
+                    title=f'Assistant {conv_type} — {teacher.full_name or teacher.email}',
                 )
                 user_msg, asst_msg = qa_pair
                 AIMessage.objects.create(conversation=conv, role='user', content=user_msg)
