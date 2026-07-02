@@ -1238,6 +1238,107 @@ class VirtualClassroom(BaseModel):
         return f"https://meet.jit.si/{room}"
 
 
+# ── Découpage automatique en segments (pour contournement limite 60 min) ──────
+
+class MeetingSegment(BaseModel):
+    """Un créneau/segment d'une classe virtuelle (max 60 min par segment)."""
+    SEGMENT_STATUS = [
+        ('PLANIFIEE',  'Planifiée'),
+        ('EN_ATTENTE', 'En attente'),
+        ('EN_COURS',   'En cours'),
+        ('TERMINEE',   'Terminée'),
+        ('ANNULEE',    'Annulée'),
+    ]
+
+    virtual_class  = models.ForeignKey(
+        VirtualClassroom, on_delete=models.CASCADE, related_name='segments'
+    )
+    sequence       = models.PositiveIntegerField()          # 1, 2, 3 …
+    meeting_url    = models.URLField(blank=True)
+    meeting_id     = models.CharField(max_length=200, blank=True)
+    start_time     = models.DateTimeField()
+    end_time       = models.DateTimeField()
+    status         = models.CharField(max_length=20, choices=SEGMENT_STATUS, default='PLANIFIEE')
+
+    started_at     = models.DateTimeField(null=True, blank=True)
+    ended_at       = models.DateTimeField(null=True, blank=True)
+    notes          = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'meeting_segments'
+        verbose_name = 'Segment de réunion'
+        verbose_name_plural = 'Segments de réunion'
+        ordering = ['sequence']
+        unique_together = ['virtual_class', 'sequence']
+
+    def __str__(self):
+        return f"{self.virtual_class.title} — Segment {self.sequence} ({self.status})"
+
+    @property
+    def duration_minutes(self):
+        return int((self.end_time - self.start_time).total_seconds() / 60)
+
+
+class SessionParticipant(BaseModel):
+    """Présence d'un étudiant sur un segment de réunion."""
+    segment             = models.ForeignKey(MeetingSegment, on_delete=models.CASCADE, related_name='participants')
+    student             = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='session_participations')
+    joined_at           = models.DateTimeField(null=True, blank=True)
+    left_at             = models.DateTimeField(null=True, blank=True)
+    attendance_duration = models.PositiveIntegerField(default=0)  # secondes
+
+    class Meta:
+        db_table = 'session_participants'
+        verbose_name = 'Participant'
+        verbose_name_plural = 'Participants'
+        unique_together = ['segment', 'student']
+
+    def __str__(self):
+        return f"{self.student.matricule} @ Segment {self.segment.sequence}"
+
+    def calculate_duration(self):
+        if self.joined_at and self.left_at:
+            self.attendance_duration = int((self.left_at - self.joined_at).total_seconds())
+            self.save(update_fields=['attendance_duration'])
+
+
+class SessionLog(BaseModel):
+    """Journal des événements liés aux classes virtuelles (audit)."""
+    LOG_TYPES = [
+        ('CREATED',       'Réunion créée'),
+        ('STARTED',       'Réunion démarrée'),
+        ('ENDED',         'Réunion terminée'),
+        ('NOTIF_10MIN',   'Notification 10 min'),
+        ('NOTIF_5MIN',    'Notification 5 min'),
+        ('NOTIF_1MIN',    'Notification 1 min'),
+        ('NOTIF_NEXT',    'Notification session suivante'),
+        ('JOINED',        'Participant rejoint'),
+        ('LEFT',          'Participant parti'),
+        ('TRANSITION',    'Transition de session'),
+        ('INCIDENT',      'Incident'),
+    ]
+    virtual_class = models.ForeignKey(
+        VirtualClassroom, on_delete=models.CASCADE, related_name='logs'
+    )
+    segment       = models.ForeignKey(
+        MeetingSegment, on_delete=models.SET_NULL, null=True, blank=True, related_name='logs'
+    )
+    log_type      = models.CharField(max_length=20, choices=LOG_TYPES)
+    actor         = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    detail        = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'session_logs'
+        verbose_name = 'Journal de session'
+        verbose_name_plural = 'Journaux de session'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.virtual_class.title} — {self.log_type}"
+
+
 class ClassroomPoll(BaseModel):
     classroom    = models.ForeignKey(VirtualClassroom, on_delete=models.CASCADE, related_name='polls')
     question     = models.CharField(max_length=500)

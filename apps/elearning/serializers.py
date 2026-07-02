@@ -9,6 +9,7 @@ from .models import (
     AIConversation, AIMessage,
     VideoLibrary, VideoSubtitle, VideoProgress, VideoDownloadToken,
     VirtualClassroom, ClassroomPoll, PollResponse, ClassroomChatMessage, HandRaise,
+    MeetingSegment, SessionParticipant, SessionLog,
     Course, CourseSection, CourseChapter, CourseLesson,
 )
 
@@ -755,6 +756,60 @@ class VirtualClassroomSerializer(serializers.ModelSerializer):
 
     def get_jitsi_url(self, obj):
         return obj.get_jitsi_url()
+
+
+class MeetingSegmentSerializer(serializers.ModelSerializer):
+    duration_minutes = serializers.ReadOnlyField()
+    participants_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MeetingSegment
+        fields = [
+            'id', 'virtual_class', 'sequence', 'meeting_url', 'meeting_id',
+            'start_time', 'end_time', 'status', 'started_at', 'ended_at',
+            'duration_minutes', 'participants_count', 'notes', 'created_at',
+        ]
+        read_only_fields = ['id', 'started_at', 'ended_at', 'created_at']
+
+    def get_participants_count(self, obj):
+        return obj.participants.count()
+
+
+class SessionParticipantSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    matricule    = serializers.CharField(source='student.matricule', read_only=True)
+
+    class Meta:
+        model = SessionParticipant
+        fields = ['id', 'segment', 'student', 'student_name', 'matricule',
+                  'joined_at', 'left_at', 'attendance_duration', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def get_student_name(self, obj):
+        u = obj.student.user
+        return f"{u.first_name} {u.last_name}".strip() or u.email
+
+
+class SessionLogSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SessionLog
+        fields = ['id', 'virtual_class', 'segment', 'log_type', 'actor', 'actor_name', 'detail', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def get_actor_name(self, obj):
+        if obj.actor:
+            return f"{obj.actor.first_name} {obj.actor.last_name}".strip() or obj.actor.email
+        return None
+
+
+class VirtualClassroomDetailSerializer(VirtualClassroomSerializer):
+    """Extended serializer that includes segments."""
+    segments = MeetingSegmentSerializer(many=True, read_only=True)
+
+    class Meta(VirtualClassroomSerializer.Meta):
+        fields = VirtualClassroomSerializer.Meta.fields + ['segments']
 
 
 class AITranscriptSerializer(serializers.Serializer):

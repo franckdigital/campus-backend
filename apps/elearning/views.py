@@ -16,6 +16,7 @@ from .models import (
     AIConversation, AIMessage,
     VideoLibrary, VideoSubtitle, VideoProgress, VideoDownloadToken,
     VirtualClassroom, ClassroomPoll, PollResponse, ClassroomChatMessage, HandRaise,
+    MeetingSegment, SessionParticipant, SessionLog,
     ExamSnapshot,
     Course, CourseSection, CourseChapter, CourseLesson,
 )
@@ -34,8 +35,10 @@ from .serializers import (
     AIConversationSerializer, AIConversationListSerializer, AIMessageSerializer,
     AISendMessageSerializer, AIGenerateSerializer, AIGradeSubmissionSerializer,
     VideoLibrarySerializer, VideoSubtitleSerializer, VideoProgressSerializer,
-    VirtualClassroomSerializer, ClassroomPollSerializer, PollResponseSerializer,
+    VirtualClassroomSerializer, VirtualClassroomDetailSerializer,
+    ClassroomPollSerializer, PollResponseSerializer,
     ClassroomChatMessageSerializer, HandRaiseSerializer, AITranscriptSerializer,
+    MeetingSegmentSerializer, SessionParticipantSerializer, SessionLogSerializer,
     CourseSerializer, CourseListSerializer,
     CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
@@ -1431,6 +1434,245 @@ class VirtualClassroomViewSet(viewsets.ModelViewSet):
         classroom.ai_summary = summary
         classroom.save()
         return Response({'ai_summary': summary, 'tokens_used': tokens})
+
+    # ── Segments ────────────────────────────────────────────────────────────
+
+    def retrieve(self, request, *args, **kwargs):
+        """Return classroom with segments."""
+        instance = self.get_object()
+        serializer = VirtualClassroomDetailSerializer(instance, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='generate-segments')
+    def generate_segments(self, request, pk=None):
+        """Split the classroom duration into ≤60-min segments and persist them."""
+        from django.utils import timezone
+        import math, uuid
+
+        classroom = self.get_object()
+        segment_max = int(request.data.get('segment_duration', 55))  # min par segment
+        force = request.data.get('force', False)
+
+        if classroom.segments.exists() and not force:
+            return Response(
+                {'detail': 'Des segments existent déjà. Passez force=true pour regénérer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Supprimer anciens si force
+        if force:
+            classroom.segments.all().delete()
+
+        total = classroom.duration_minutes
+        n_segments = math.ceil(total / segment_max)
+        provider = classroom.provider
+        segments = []
+
+        for i in range(n_segments):
+            seq = i + 1
+            seg_start = classroom.start_time + __import__('datetime').timedelta(minutes=i * segment_max)
+            seg_duration = min(segment_max, total - i * segment_max)
+            seg_end = seg_start + __import__('datetime').timedelta(minutes=seg_duration)
+
+            # URL de réunion par fournisseur
+            if provider == 'JITSI':
+                room = f"{classroom.jitsi_room_name or 'campus'}-seg{seq}"
+                meeting_url = f"https://meet.jit.si/{room}"
+            elif provider == 'MEET':
+                meeting_url = classroom.join_url  # URL existante (Google Meet)
+            else:
+                meeting_url = classroom.join_url
+
+            seg = MeetingSegment.objects.create(
+                virtual_class=classroom,
+                sequence=seq,
+                meeting_url=meeting_url,
+                start_time=seg_start,
+                end_time=seg_end,
+                status='PLANIFIEE',
+            )
+            segments.append(seg)
+
+        SessionLog.objects.create(
+            virtual_class=classroom,
+            log_type='CREATED',
+            actor=request.user,
+            detail=f'{n_segments} segments générés (durée totale {total} min)',
+        )
+        return Response(MeetingSegmentSerializer(segments, many=True).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='segments')
+    def segments(self, request, pk=None):
+        classroom = self.get_object()
+        qs = classroom.segments.order_by('sequence')
+        return Response(MeetingSegmentSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['get'], url_path='logs')
+    def logs(self, request, pk=None):
+        classroom = self.get_object()
+        qs = classroom.logs.order_by('-created_at')[:50]
+        return Response(SessionLogSerializer(qs, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='schedule-tasks')
+    def schedule_tasks(self, request, pk=None):
+        """Planifie toutes les tâches Celery (notifications + auto-transitions) pour les segments."""
+        from .tasks import schedule_classroom_tasks
+        classroom = self.get_object()
+        if not classroom.segments.exists():
+            return Response(
+                {'detail': 'Générez d\'abord les segments (generate-segments).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        result = schedule_classroom_tasks.delay(str(classroom.id))
+        return Response({'task_id': result.id, 'detail': 'Planification en cours.'})
+
+    @action(detail=True, methods=['get'], url_path='attendance-summary')
+    def attendance_summary(self, request, pk=None):
+        """Résumé de présence par segment."""
+        classroom = self.get_object()
+        result = []
+        for seg in classroom.segments.order_by('sequence'):
+            participants = seg.participants.all()
+            result.append({
+                'segment': seg.sequence,
+                'status': seg.status,
+                'start_time': seg.start_time,
+                'end_time': seg.end_time,
+                'participants_count': participants.count(),
+                'avg_duration_seconds': int(
+                    sum(p.attendance_duration for p in participants) / max(participants.count(), 1)
+                ),
+            })
+        return Response(result)
+
+
+class MeetingSegmentViewSet(viewsets.ModelViewSet):
+    serializer_class = MeetingSegmentSerializer
+    filter_backends  = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['virtual_class', 'status', 'sequence']
+    ordering_fields  = ['sequence', 'start_time']
+
+    def get_queryset(self):
+        return MeetingSegment.objects.filter(is_active=True)
+
+    @action(detail=True, methods=['post'], url_path='start')
+    def start_segment(self, request, pk=None):
+        from django.utils import timezone
+        seg = self.get_object()
+        if seg.status not in ('PLANIFIEE', 'EN_ATTENTE'):
+            return Response({'detail': 'Impossible de démarrer ce segment.'}, status=400)
+        seg.status = 'EN_COURS'
+        seg.started_at = timezone.now()
+        seg.save()
+        SessionLog.objects.create(
+            virtual_class=seg.virtual_class,
+            segment=seg,
+            log_type='STARTED',
+            actor=request.user,
+            detail=f'Segment {seg.sequence} démarré',
+        )
+        return Response(MeetingSegmentSerializer(seg).data)
+
+    @action(detail=True, methods=['post'], url_path='end')
+    def end_segment(self, request, pk=None):
+        from django.utils import timezone
+        seg = self.get_object()
+        if seg.status != 'EN_COURS':
+            return Response({'detail': 'Le segment n\'est pas en cours.'}, status=400)
+        seg.status = 'TERMINEE'
+        seg.ended_at = timezone.now()
+        seg.save()
+        SessionLog.objects.create(
+            virtual_class=seg.virtual_class,
+            segment=seg,
+            log_type='ENDED',
+            actor=request.user,
+            detail=f'Segment {seg.sequence} terminé',
+        )
+
+        # Chercher le segment suivant
+        next_seg = MeetingSegment.objects.filter(
+            virtual_class=seg.virtual_class,
+            sequence=seg.sequence + 1,
+        ).first()
+        if next_seg:
+            next_seg.status = 'EN_ATTENTE'
+            next_seg.save()
+            SessionLog.objects.create(
+                virtual_class=seg.virtual_class,
+                segment=next_seg,
+                log_type='TRANSITION',
+                actor=request.user,
+                detail=f'Transition vers segment {next_seg.sequence}',
+            )
+        else:
+            # Toutes les sessions terminées — marquer la classe comme terminée
+            classroom = seg.virtual_class
+            classroom.is_ended = True
+            classroom.ended_at = timezone.now()
+            classroom.save()
+
+        return Response({
+            'ended': MeetingSegmentSerializer(seg).data,
+            'next': MeetingSegmentSerializer(next_seg).data if next_seg else None,
+        })
+
+    @action(detail=True, methods=['post'], url_path='join')
+    def join_segment(self, request, pk=None):
+        from django.utils import timezone
+        from apps.students.models import Student
+        seg = self.get_object()
+        try:
+            student = Student.objects.get(user=request.user)
+        except Student.DoesNotExist:
+            return Response({'detail': 'Profil étudiant requis.'}, status=400)
+
+        part, created = SessionParticipant.objects.get_or_create(
+            segment=seg, student=student,
+            defaults={'joined_at': timezone.now()},
+        )
+        if not created and not part.joined_at:
+            part.joined_at = timezone.now()
+            part.save()
+
+        SessionLog.objects.create(
+            virtual_class=seg.virtual_class,
+            segment=seg,
+            log_type='JOINED',
+            actor=request.user,
+            detail=f'{student.matricule} a rejoint le segment {seg.sequence}',
+        )
+        return Response({'joined': True, 'meeting_url': seg.meeting_url})
+
+    @action(detail=True, methods=['post'], url_path='leave')
+    def leave_segment(self, request, pk=None):
+        from django.utils import timezone
+        from apps.students.models import Student
+        seg = self.get_object()
+        try:
+            student = Student.objects.get(user=request.user)
+            part = SessionParticipant.objects.get(segment=seg, student=student)
+        except Exception:
+            return Response({'detail': 'Participation introuvable.'}, status=404)
+
+        part.left_at = timezone.now()
+        part.save()
+        part.calculate_duration()
+
+        SessionLog.objects.create(
+            virtual_class=seg.virtual_class,
+            segment=seg,
+            log_type='LEFT',
+            actor=request.user,
+            detail=f'{student.matricule} a quitté le segment {seg.sequence}',
+        )
+        return Response({'left': True, 'duration_seconds': part.attendance_duration})
+
+    @action(detail=True, methods=['get'], url_path='participants')
+    def participants(self, request, pk=None):
+        seg = self.get_object()
+        qs = seg.participants.select_related('student__user')
+        return Response(SessionParticipantSerializer(qs, many=True).data)
 
 
 # ── Cours autonomes ──────────────────────────────────────────────────────────

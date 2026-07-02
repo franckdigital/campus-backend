@@ -11,7 +11,7 @@ from .views import (
     VirtualLabViewSet, LabSubmissionViewSet,
     AIConversationViewSet, AIGenerateView, AIGradeView,
     VideoLibraryViewSet,
-    VirtualClassroomViewSet,
+    VirtualClassroomViewSet, MeetingSegmentViewSet,
     CourseViewSet, CourseSectionViewSet, CourseChapterViewSet, CourseLessonViewSet,
 )
 
@@ -39,6 +39,7 @@ router.register(r'ai-conversations', AIConversationViewSet, basename='ai-convers
 router.register(r'videos', VideoLibraryViewSet, basename='video')
 # Lot 8 — Classes virtuelles
 router.register(r'classrooms', VirtualClassroomViewSet, basename='classroom')
+router.register(r'meeting-segments', MeetingSegmentViewSet, basename='meeting-segment')
 # Cours autonomes
 router.register(r'courses', CourseViewSet, basename='course')
 router.register(r'course-sections', CourseSectionViewSet, basename='course-section')
