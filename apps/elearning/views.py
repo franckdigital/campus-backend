@@ -213,6 +213,17 @@ class LessonViewSet(viewsets.ModelViewSet):
             'total_students': total_students,
         })
 
+    @action(detail=False, methods=['get'], url_path='my-completed')
+    def my_completed(self, request):
+        """Return lesson IDs completed by the current student."""
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response([])
+        ids = LessonProgress.objects.filter(
+            student=student, is_completed=True
+        ).values_list('lesson_id', flat=True)
+        return Response(list(ids))
+
     @action(detail=True, methods=['post'], url_path='mark-complete')
     def mark_complete(self, request, pk=None):
         """Manual completion for non-trackable lessons (text/pdf/file)."""
