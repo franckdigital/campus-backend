@@ -1,20 +1,25 @@
 [Unit]
-Description=Campus Celery Beat Scheduler
-After=network.target mysql.service redis.service
+Description=Campus Backend — Celery Beat Scheduler
+After=network.target redis.service
 Requires=redis.service
 
 [Service]
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/campus-backend
-Environment="PATH=/var/www/campus-backend/venv/bin"
-Environment="DJANGO_SETTINGS_MODULE=config.settings"
-ExecStart=/var/www/campus-backend/venv/bin/celery \
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/var/www/campus/campus-backend
+Environment=PATH=/var/www/campus/campus-backend/venv/bin
+Environment=PYTHONPATH=/var/www/campus/campus-backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings
+EnvironmentFile=/var/www/campus/campus-backend/.env
+ExecStart=/var/www/campus/campus-backend/venv/bin/celery \
     -A config beat \
     --loglevel=info \
-    --logfile=/var/log/campus/celery_beat.log
+    --logfile=/var/log/campus-celery-beat.log \
+    --scheduler django_celery_beat.schedulers:DatabaseScheduler
+ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
-RestartSec=3
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
