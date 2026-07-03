@@ -143,6 +143,9 @@ class Command(BaseCommand):
             cls = classes[i % len(classes)]
             subjects = [cst.subject for cst in cls.subject_teachers.select_related('subject').all()] or all_subjects
             subject = subjects[i % len(subjects)] if subjects else None
+            if subject is None:
+                self.stdout.write(self.style.WARNING(f'  Skipping "{edata["title"]}" — no subject found'))
+                continue
 
             start = timezone.now() + timezone.timedelta(hours=edata['offset_hours'])
 

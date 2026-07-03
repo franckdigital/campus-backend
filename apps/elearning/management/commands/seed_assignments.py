@@ -134,16 +134,19 @@ class Command(BaseCommand):
             subject = subjects[i % len(subjects)] if subjects else None
             due_date = timezone.now() + timezone.timedelta(days=adata['days_offset'])
 
+            if subject is None:
+                self.stdout.write(self.style.WARNING(f'  Skipping "{adata["title"]}" — no subject found'))
+                continue
+
             assignment = Assignment.objects.create(
                 title=adata['title'],
                 description=adata['description'],
                 class_obj=cls,
                 subject=subject,
-                assignment_type=adata.get('type', 'HOMEWORK'),
                 max_score=adata['max_score'],
                 due_date=due_date,
                 status='PUBLISHED',
-                allow_late=adata['days_offset'] < 0,
+                allow_late_submission=adata['days_offset'] < 0,
                 is_active=True,
             )
             created.append((assignment, adata))
@@ -169,7 +172,6 @@ class Command(BaseCommand):
                     student=student,
                     content=f"Réponse de {student.user.first_name} pour '{assignment.title}'.\n\nJ'ai analysé le problème et voici ma solution :\n\n[Code et explications ici]" if use_text else '',
                     status='SUBMITTED',
-                    submitted_at=timezone.now() - timezone.timedelta(hours=random.randint(1, 48)),
                 )
 
                 # Correction selon le scénario
@@ -178,9 +180,7 @@ class Command(BaseCommand):
                     AssignmentCorrection.objects.create(
                         submission=submission,
                         score=score,
-                        max_score=adata['max_score'],
                         feedback=random.choice(CORRECTION_FEEDBACKS),
-                        corrected_at=timezone.now() - timezone.timedelta(hours=random.randint(0, 24)),
                     )
                     submission.status = 'GRADED'
                     submission.save()
