@@ -51,8 +51,8 @@ class Command(BaseCommand):
         # Référence : 3 juillet 2026 00h00 UTC
         base_date = datetime(2026, 7, 3, 0, 0, 0)
         if timezone.is_aware(timezone.now()):
-            import pytz
-            base_date = timezone.make_aware(base_date, pytz.UTC)
+            from datetime import timezone as dt_tz
+            base_date = base_date.replace(tzinfo=dt_tz.utc)
 
         # Définir les tranches horaires
         tranches = [
