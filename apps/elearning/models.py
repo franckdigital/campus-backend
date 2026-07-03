@@ -1443,6 +1443,7 @@ class Course(BaseModel):
     """Cours autonome structuré (Sections → Chapitres → Leçons)."""
     site       = models.ForeignKey('core.Site', on_delete=models.SET_NULL, null=True, blank=True, related_name='courses')
     instructor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='courses_taught')
+    quiz       = models.ForeignKey('Quiz', on_delete=models.SET_NULL, null=True, blank=True, related_name='courses')
     title      = models.CharField(max_length=255)
     subtitle   = models.CharField(max_length=500, blank=True)
     description         = models.TextField(blank=True)

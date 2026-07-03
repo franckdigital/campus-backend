@@ -860,6 +860,7 @@ class CourseSerializer(serializers.ModelSerializer):
         model = Course
         fields = [
             'id', 'site', 'instructor', 'instructor_name',
+            'quiz',
             'title', 'subtitle', 'description', 'thumbnail', 'thumbnail_url',
             'level', 'language', 'status',
             'price', 'is_free', 'certificate_enabled',
@@ -894,6 +895,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'id', 'title', 'subtitle', 'thumbnail_url', 'level', 'status',
             'price', 'is_free', 'average_rating', 'total_students',
             'instructor', 'instructor_name', 'section_count',
+            'quiz',
             'certificate_enabled', 'is_active', 'created_at',
         ]
 
