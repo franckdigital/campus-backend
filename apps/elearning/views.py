@@ -615,7 +615,7 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 class AssignmentViewSet(viewsets.ModelViewSet):
     queryset = Assignment.objects.select_related(
         'class_obj', 'subject', 'teacher__user', 'lesson'
-    ).prefetch_related('submissions').all()
+    ).prefetch_related('submissions', 'submissions__correction').all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title', 'description']
     ordering_fields = ['due_date', 'created_at']
@@ -1715,6 +1715,38 @@ class CourseViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
         return Response(CourseSerializer(instance, context={'request': request}).data)
+
+    @action(detail=True, methods=['get'], url_path='find-quiz')
+    def find_quiz(self, request, pk=None):
+        """Return the quiz for this course: direct FK first, then title-based search."""
+        course = self.get_object()
+        quiz = None
+
+        # 1. Use direct FK if already configured
+        if course.quiz_id:
+            quiz = course.quiz
+        else:
+            # 2. Search by course title keywords
+            import re
+            words = re.findall(r'\b\w{4,}\b', course.title, re.UNICODE)
+            for word in words[:3]:
+                qs = Quiz.objects.filter(title__icontains=word, is_published=True, is_active=True)
+                if qs.count() == 1:
+                    quiz = qs.first()
+                    break
+            # 3. Broader: any quiz with a word match
+            if not quiz and words:
+                from django.db.models import Q
+                q_filter = Q()
+                for word in words[:3]:
+                    q_filter |= Q(title__icontains=word)
+                qs = Quiz.objects.filter(q_filter, is_published=True, is_active=True)
+                if qs.exists():
+                    quiz = qs.first()
+
+        if quiz:
+            return Response({'id': str(quiz.id), 'title': quiz.title})
+        return Response({'id': None, 'title': None})
 
 
 class CourseSectionViewSet(viewsets.ModelViewSet):

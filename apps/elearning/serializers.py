@@ -331,13 +331,36 @@ class AssignmentListSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source='class_obj.name', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     submission_count = serializers.IntegerField(read_only=True)
+    submission = serializers.SerializerMethodField()
 
     class Meta:
         model = Assignment
         fields = [
             'id', 'title', 'class_obj', 'class_name', 'subject', 'subject_name',
-            'due_date', 'max_score', 'status', 'submission_count'
+            'due_date', 'max_score', 'status', 'submission_count', 'submission'
         ]
+
+    def get_submission(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request.user, 'student_profile'):
+            return None
+        sub = obj.submissions.filter(student=request.user.student_profile).first()
+        if not sub:
+            return None
+        correction = getattr(sub, 'correction', None)
+        return {
+            'id': str(sub.id),
+            'status': sub.status,
+            'submitted_at': sub.submitted_at,
+            'is_late': sub.is_late,
+            'content': sub.content,
+            'file': sub.file.url if sub.file else None,
+            'correction': {
+                'score': correction.score,
+                'feedback': correction.feedback,
+                'corrected_file': correction.corrected_file.url if correction.corrected_file else None,
+            } if correction else None,
+        }
 
 
 class CreateZoomMeetingSerializer(serializers.Serializer):
