@@ -126,11 +126,9 @@ class Command(BaseCommand):
                 description=qdata['description'],
                 class_obj=cls,
                 subject=subject,
-                duration_minutes=qdata['duration'],
-                passing_score=qdata['passing'],
-                total_points=100,
+                time_limit_minutes=qdata['duration'],
+                pass_score_percent=qdata['passing'],
                 shuffle_questions=True,
-                shuffle_choices=False,
                 is_published=True,
                 is_active=True,
             )
@@ -144,15 +142,17 @@ class Command(BaseCommand):
                         question_type='TRUEFALSE',
                         text=q['text'],
                         points=10,
-                        true_false_answer=q['correct'],
                     )
+                    # TRUEFALSE uses Choice objects: True/False with is_correct
+                    Choice.objects.create(question=question, text='Vrai', is_correct=q['correct'] is True, order=0)
+                    Choice.objects.create(question=question, text='Faux', is_correct=q['correct'] is False, order=1)
                 elif qtype == 'TEXT':
                     question = Question.objects.create(
                         quiz=quiz, order=j + 1,
                         question_type='TEXT',
                         text=q['text'],
                         points=10,
-                        sample_answer=q.get('sample_answer', ''),
+                        text_answer=q.get('sample_answer', ''),
                     )
                 elif qtype == 'NUMERIC':
                     question = Question.objects.create(
@@ -164,13 +164,13 @@ class Command(BaseCommand):
                         numeric_tolerance=0.5,
                     )
                 else:
-                    is_multi = qtype == 'MULTI'
+                    # MCQ → QCU (single), MULTI → QCM (multiple)
+                    qtype_mapped = 'QCM' if qtype == 'MULTI' else 'QCU'
                     question = Question.objects.create(
                         quiz=quiz, order=j + 1,
-                        question_type='MCQ',
+                        question_type=qtype_mapped,
                         text=q['text'],
                         points=10,
-                        allow_multiple=is_multi,
                     )
                     for k, choice_text in enumerate(q.get('choices', [])):
                         Choice.objects.create(
@@ -190,28 +190,28 @@ class Command(BaseCommand):
             students_sample = random.sample(all_students, min(8, len(all_students)))
             for student in students_sample:
                 score = random.randint(20, 100)
-                status = 'COMPLETED'
                 attempt = QuizAttempt.objects.create(
                     quiz=quiz,
                     student=student,
-                    status=status,
                     score=score,
                     max_score=100,
-                    started_at=timezone.now() - timezone.timedelta(hours=random.randint(1, 72)),
-                    completed_at=timezone.now() - timezone.timedelta(hours=random.randint(0, 1)),
+                    percent=score,
+                    is_passed=score >= quiz.pass_score_percent,
+                    is_graded=True,
+                    submitted_at=timezone.now() - timezone.timedelta(hours=random.randint(0, 1)),
                 )
-                # Réponses simulées
+                # Réponses simulées pour questions à choix
                 for q in questions[:5]:
-                    if q.question_type in ('MCQ',):
+                    if q.question_type in ('QCU', 'QCM', 'TRUEFALSE'):
                         correct_choice = q.choices.filter(is_correct=True).first()
                         wrong_choice = q.choices.filter(is_correct=False).first()
                         chosen = correct_choice if random.random() > 0.4 else wrong_choice
                         if chosen:
-                            AttemptAnswer.objects.create(
+                            ans = AttemptAnswer.objects.create(
                                 attempt=attempt, question=q,
-                                selected_choices=[str(chosen.id)],
                                 is_correct=(chosen == correct_choice),
                                 points_earned=q.points if chosen == correct_choice else 0,
                             )
+                            ans.selected_choices.set([chosen])
 
         self.stdout.write(self.style.SUCCESS(f'\n✅ {len(created_quizzes)} évaluations créées avec tentatives.'))

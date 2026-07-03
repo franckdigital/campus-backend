@@ -156,19 +156,19 @@ class Command(BaseCommand):
                     title=f"Quiz — {edata['title']}",
                     class_obj=cls,
                     subject=subject,
-                    duration_minutes=edata['duration'],
-                    passing_score=edata['pass_score'],
-                    total_points=100,
+                    time_limit_minutes=edata['duration'],
+                    pass_score_percent=edata['pass_score'],
                     is_published=True,
                     is_active=True,
                 )
                 for j, (qtype, text, choices, correct) in enumerate(EXAM_QUESTIONS[:8]):
                     if qtype == 'TRUEFALSE':
-                        Question.objects.create(
+                        q = Question.objects.create(
                             quiz=quiz, order=j+1,
                             question_type='TRUEFALSE', text=text, points=12,
-                            true_false_answer=correct,
                         )
+                        Choice.objects.create(question=q, text='Vrai', is_correct=correct is True, order=0)
+                        Choice.objects.create(question=q, text='Faux', is_correct=correct is False, order=1)
                     elif qtype == 'TEXT':
                         Question.objects.create(
                             quiz=quiz, order=j+1,
@@ -181,10 +181,10 @@ class Command(BaseCommand):
                             numeric_answer=correct, numeric_tolerance=0,
                         )
                     else:
+                        qtype_mapped = 'QCM' if qtype == 'MULTI' else 'QCU'
                         q = Question.objects.create(
                             quiz=quiz, order=j+1,
-                            question_type='MCQ', text=text, points=12,
-                            allow_multiple=(qtype == 'MULTI'),
+                            question_type=qtype_mapped, text=text, points=12,
                         )
                         for k, c in enumerate(choices or []):
                             Choice.objects.create(
@@ -220,16 +220,14 @@ class Command(BaseCommand):
 
             students_sample = random.sample(all_students, min(12, len(all_students)))
             for student in students_sample:
-                score = random.randint(0, 100) if random.random() > 0.1 else None
-                status = 'SUBMITTED' if score is not None else 'IN_PROGRESS'
+                submitted = random.random() > 0.1
+                status = 'SUBMITTED' if submitted else 'STARTED'
                 ExamSession.objects.create(
                     exam=exam,
                     student=student,
                     status=status,
-                    score=score,
-                    started_at=timezone.now() - timezone.timedelta(hours=abs(edata['offset_hours']) + 1),
-                    submitted_at=timezone.now() - timezone.timedelta(hours=abs(edata['offset_hours'])) if status == 'SUBMITTED' else None,
-                    tab_switches=random.randint(0, 3),
+                    submitted_at=timezone.now() - timezone.timedelta(hours=abs(edata['offset_hours'])) if submitted else None,
+                    tab_switch_count=random.randint(0, 3),
                 )
 
         self.stdout.write(self.style.SUCCESS(f'\n✅ {len(created_exams)} examens créés avec sessions.'))
