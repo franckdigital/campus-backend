@@ -129,17 +129,19 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.MIGRATE_HEADING('=== Seed Examens ==='))
 
+        from apps.academic.models import Subject
         classes = list(ClassModel.objects.filter(is_active=True)[:3])
         if not classes:
             self.stdout.write(self.style.ERROR('Aucune classe trouvée.'))
             return
 
+        all_subjects = list(Subject.objects.filter(is_active=True)[:10])
         all_students = list(Student.objects.select_related('user').all()[:20])
         created_exams = []
 
         for i, edata in enumerate(EXAM_DATA):
             cls = classes[i % len(classes)]
-            subjects = list(cls.subjects.all())
+            subjects = [cst.subject for cst in cls.subject_teachers.select_related('subject').all()] or all_subjects
             subject = subjects[i % len(subjects)] if subjects else None
 
             start = timezone.now() + timezone.timedelta(hours=edata['offset_hours'])

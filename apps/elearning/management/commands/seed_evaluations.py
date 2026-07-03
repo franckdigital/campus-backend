@@ -103,17 +103,19 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.MIGRATE_HEADING('=== Seed Évaluations ==='))
 
+        from apps.academic.models import Subject
         classes = list(ClassModel.objects.filter(is_active=True)[:3])
         if not classes:
             self.stdout.write(self.style.ERROR('Aucune classe trouvée. Exécutez d\'abord seed_full.'))
             return
 
+        all_subjects = list(Subject.objects.filter(is_active=True)[:10])
         all_students = list(Student.objects.select_related('user').all()[:20])
         created_quizzes = []
 
         for i, qdata in enumerate(QUIZ_DATA):
             cls = classes[i % len(classes)]
-            subjects = list(cls.subjects.all())
+            subjects = [cst.subject for cst in cls.subject_teachers.select_related('subject').all()] or all_subjects
             subject = subjects[i % len(subjects)] if subjects else None
 
             quiz = Quiz.objects.create(

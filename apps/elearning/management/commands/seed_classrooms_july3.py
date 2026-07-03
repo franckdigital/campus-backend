@@ -36,11 +36,13 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.MIGRATE_HEADING('=== Seed Classes Virtuelles — 3 juillet 2026 ==='))
 
+        from apps.academic.models import Subject
         classes = list(ClassModel.objects.filter(is_active=True)[:5])
         if not classes:
             self.stdout.write(self.style.ERROR('Aucune classe trouvée. Exécutez seed_full d\'abord.'))
             return
 
+        all_subjects = list(Subject.objects.filter(is_active=True)[:12])
         admin_user = User.objects.filter(is_staff=True).first()
         if not admin_user:
             self.stdout.write(self.style.ERROR('Aucun admin trouvé.'))
@@ -71,7 +73,7 @@ class Command(BaseCommand):
 
             while t < end_limit:
                 cls = classes[total_created % len(classes)]
-                subjects = list(cls.subjects.all())
+                subjects = [cst.subject for cst in cls.subject_teachers.select_related('subject').all()] or all_subjects
                 subject = subjects[total_created % len(subjects)] if subjects else None
                 provider = PROVIDERS[total_created % len(PROVIDERS)]
                 title_subj = SUBJECTS_TITLES[subject_idx % len(SUBJECTS_TITLES)]

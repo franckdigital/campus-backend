@@ -124,10 +124,13 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR('Aucun étudiant trouvé.'))
             return
 
+        from apps.academic.models import Subject
+        all_subjects = list(Subject.objects.filter(is_active=True)[:10])
+
         created = []
         for i, adata in enumerate(ASSIGNMENT_DATA):
             cls = classes[i % len(classes)]
-            subjects = list(cls.subjects.all())
+            subjects = [cst.subject for cst in cls.subject_teachers.select_related('subject').all()] or all_subjects
             subject = subjects[i % len(subjects)] if subjects else None
             due_date = timezone.now() + timezone.timedelta(days=adata['days_offset'])
 
