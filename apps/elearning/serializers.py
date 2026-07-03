@@ -96,17 +96,34 @@ class QuizListSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source='class_obj.name', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     question_count = serializers.SerializerMethodField()
+    attempts_used = serializers.SerializerMethodField()
+    best_score = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'title', 'class_obj', 'class_name', 'subject', 'subject_name',
             'lesson', 'time_limit_minutes', 'max_attempts', 'pass_score_percent',
-            'is_published', 'question_count'
+            'is_published', 'question_count', 'attempts_used', 'best_score'
         ]
 
     def get_question_count(self, obj):
         return obj.questions.filter(is_active=True).count()
+
+    def get_attempts_used(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request.user, 'student_profile'):
+            return 0
+        return obj.attempts.filter(student=request.user.student_profile).count()
+
+    def get_best_score(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request.user, 'student_profile'):
+            return None
+        best = obj.attempts.filter(student=request.user.student_profile, submitted_at__isnull=False).order_by('-percent').first()
+        if best is None:
+            return None
+        return {'percent': float(best.percent or 0), 'is_passed': best.is_passed}
 
 
 # ── Quiz : passage (étudiant) — masque les bonnes réponses ─────────────────
@@ -888,6 +905,7 @@ class CourseSerializer(serializers.ModelSerializer):
             'level', 'language', 'status',
             'price', 'is_free', 'certificate_enabled',
             'target_audience', 'requirements', 'what_you_will_learn',
+            'video_url',
             'total_students', 'average_rating',
             'sections', 'is_active', 'created_at', 'updated_at',
         ]
@@ -918,7 +936,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'id', 'title', 'subtitle', 'thumbnail_url', 'level', 'status',
             'price', 'is_free', 'average_rating', 'total_students',
             'instructor', 'instructor_name', 'section_count',
-            'quiz',
+            'quiz', 'video_url',
             'certificate_enabled', 'is_active', 'created_at',
         ]
 

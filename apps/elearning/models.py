@@ -1457,6 +1457,7 @@ class Course(BaseModel):
     target_audience     = models.TextField(blank=True)
     requirements        = models.JSONField(default=list, blank=True)
     what_you_will_learn = models.JSONField(default=list, blank=True)
+    video_url           = models.URLField(blank=True, help_text="URL vidéo de présentation (YouTube, Vimeo…)")
     total_students      = models.PositiveIntegerField(default=0)
     average_rating      = models.DecimalField(max_digits=3, decimal_places=2, default=0)
 
