@@ -305,6 +305,7 @@ class Quiz(BaseModel):
     pass_score_percent = models.PositiveSmallIntegerField(default=50)
     shuffle_questions = models.BooleanField(default=True)
     is_published = models.BooleanField(default=False)
+    subject_file = models.FileField(upload_to='quiz_subjects/', blank=True, null=True)
 
     class Meta:
         db_table = 'quizzes'
@@ -796,6 +797,8 @@ class SecureExam(BaseModel):
     is_published = models.BooleanField(default=False)
     pass_score_percent = models.PositiveSmallIntegerField(default=50)
     coefficient = models.DecimalField(max_digits=4, decimal_places=2, default=1)
+    subject_file = models.FileField(upload_to='exam_subjects/', blank=True, null=True)
+    max_score = models.DecimalField(max_digits=5, decimal_places=2, default=20)
 
     class Meta:
         db_table = 'secure_exams'
@@ -844,6 +847,18 @@ class ExamSession(BaseModel):
     is_flagged = models.BooleanField(default=False)
     flag_reason = models.TextField(blank=True)
     events_log = models.JSONField(default=list)
+
+    # Correction du prof
+    score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    feedback = models.TextField(blank=True)
+    corrected_file = models.FileField(upload_to='exam_corrections/', blank=True, null=True)
+    corrected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='graded_exam_sessions',
+    )
+    corrected_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'exam_sessions'
