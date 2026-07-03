@@ -77,7 +77,7 @@ class QuizSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'description', 'class_obj', 'class_name', 'subject', 'subject_name',
             'lesson', 'time_limit_minutes', 'max_attempts', 'pass_score_percent',
-            'shuffle_questions', 'is_published', 'questions', 'question_count', 'max_score',
+            'shuffle_questions', 'is_published', 'subject_file', 'questions', 'question_count', 'max_score',
             'attempts_used', 'is_active', 'created_at'
         ]
         read_only_fields = ['id', 'created_at']
@@ -458,6 +458,8 @@ class SecureExamSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     is_available = serializers.SerializerMethodField()
     exam_type_label = serializers.CharField(source='get_exam_type_display', read_only=True)
+    exam_pdf = serializers.SerializerMethodField()
+    my_session = serializers.SerializerMethodField()
 
     class Meta:
         model = SecureExam
@@ -469,12 +471,41 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'fullscreen_required', 'webcam_required', 'block_copy_paste',
             'max_tab_switches', 'require_student_photo', 'ai_proctoring',
             'is_published', 'pass_score_percent', 'coefficient',
-            'is_available', 'is_active', 'created_at',
+            'max_score', 'subject_file', 'exam_pdf',
+            'is_available', 'my_session', 'is_active', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
 
     def get_is_available(self, obj):
         return obj.is_available()
+
+    def get_exam_pdf(self, obj):
+        if not obj.subject_file:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.subject_file.url)
+        return obj.subject_file.url
+
+    def get_my_session(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request.user, 'student_profile'):
+            return None
+        try:
+            student = request.user.student_profile
+            session = obj.sessions.filter(student=student).order_by('-started_at').first()
+            if session:
+                return {
+                    'id': str(session.id),
+                    'status': session.status,
+                    'submitted_at': session.submitted_at,
+                    'score': session.score,
+                    'feedback': session.feedback,
+                    'submission_file': request.build_absolute_uri(session.submission_file.url) if session.submission_file else None,
+                }
+        except Exception:
+            pass
+        return None
 
 
 class ExamSessionSerializer(serializers.ModelSerializer):
@@ -489,6 +520,10 @@ class ExamSessionSerializer(serializers.ModelSerializer):
             'time_remaining_seconds',
             'tab_switch_count', 'fullscreen_exit_count', 'copy_attempt_count', 'focus_lost_count',
             'is_flagged', 'flag_reason', 'events_log',
+            # correction prof
+            'score', 'feedback', 'corrected_file', 'corrected_by', 'corrected_at',
+            # copie étudiant
+            'submission_file', 'submission_note',
             'is_active', 'created_at',
         ]
         read_only_fields = ['id', 'started_at', 'created_at', 'events_log',

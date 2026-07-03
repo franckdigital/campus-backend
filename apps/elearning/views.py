@@ -946,6 +946,66 @@ class ExamSessionSnapshotView(APIView):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Exam session grading + student submission upload
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ExamSessionGradeView(APIView):
+    """POST /elearning/exam-sessions/<session_id>/grade/ — Corriger une session (prof/admin).
+    Accepte multipart/form-data (avec fichier) ou application/json (sans fichier).
+    """
+
+    def post(self, request, session_id):
+        try:
+            session = ExamSession.objects.get(id=session_id)
+        except ExamSession.DoesNotExist:
+            return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        score = request.data.get('score')
+        feedback = request.data.get('feedback', '')
+        corrected_file = request.FILES.get('corrected_file')
+
+        if score is not None:
+            try:
+                session.score = float(score)
+            except (TypeError, ValueError):
+                return Response({'detail': 'Score invalide.'}, status=status.HTTP_400_BAD_REQUEST)
+        if feedback:
+            session.feedback = feedback
+        if corrected_file:
+            session.corrected_file = corrected_file
+
+        session.corrected_by = request.user
+        from django.utils import timezone as tz
+        session.corrected_at = tz.now()
+        session.save()
+        return Response(ExamSessionSerializer(session).data)
+
+
+class ExamSessionSubmitFileView(APIView):
+    """POST /elearning/exam-sessions/<session_id>/submit-file/ — Étudiant uploade sa copie."""
+
+    def post(self, request, session_id):
+        try:
+            session = ExamSession.objects.get(id=session_id)
+        except ExamSession.DoesNotExist:
+            return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Vérifier que c'est bien l'étudiant propriétaire
+        student = getattr(request.user, 'student_profile', None)
+        if student and session.student_id != student.id:
+            return Response({'detail': 'Non autorisé.'}, status=status.HTTP_403_FORBIDDEN)
+
+        submission_file = request.FILES.get('submission_file')
+        if not submission_file:
+            return Response({'detail': 'Fichier requis.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        session.submission_file = submission_file
+        session.submission_note = request.data.get('note', '')
+        session.save()
+        return Response(ExamSessionSerializer(session).data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # LOT 13 — Laboratoires virtuels
 # ─────────────────────────────────────────────────────────────────────────────
 

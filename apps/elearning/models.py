@@ -860,6 +860,10 @@ class ExamSession(BaseModel):
     )
     corrected_at = models.DateTimeField(null=True, blank=True)
 
+    # Copie soumise par l'étudiant (travail scanné / réponses PDF)
+    submission_file = models.FileField(upload_to='exam_submissions/', blank=True, null=True)
+    submission_note = models.TextField(blank=True)
+
     class Meta:
         db_table = 'exam_sessions'
         verbose_name = 'Session d\'examen'

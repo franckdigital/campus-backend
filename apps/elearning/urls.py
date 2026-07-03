@@ -8,6 +8,7 @@ from .views import (
     SubmitAssignmentView, CorrectSubmissionView,
     LibraryDocumentViewSet,
     SecureExamViewSet, ExamSessionSnapshotView,
+    ExamSessionGradeView, ExamSessionSubmitFileView,
     VirtualLabViewSet, LabSubmissionViewSet,
     AIConversationViewSet, AIGenerateView, AIGradeView,
     VideoLibraryViewSet,
@@ -54,5 +55,7 @@ urlpatterns = [
     path('elearning/ai/generate/', AIGenerateView.as_view(), name='ai-generate'),
     path('elearning/ai/grade/', AIGradeView.as_view(), name='ai-grade'),
     path('elearning/exams/sessions/<uuid:session_id>/snapshot/', ExamSessionSnapshotView.as_view(), name='exam-snapshot'),
+    path('elearning/exam-sessions/<uuid:session_id>/grade/', ExamSessionGradeView.as_view(), name='exam-session-grade'),
+    path('elearning/exam-sessions/<uuid:session_id>/submit-file/', ExamSessionSubmitFileView.as_view(), name='exam-session-submit-file'),
     path('elearning/', include(router.urls)),
 ]
