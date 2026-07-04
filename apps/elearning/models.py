@@ -799,6 +799,7 @@ class SecureExam(BaseModel):
     coefficient = models.DecimalField(max_digits=4, decimal_places=2, default=1)
     subject_file = models.FileField(upload_to='exam_subjects/', blank=True, null=True)
     max_score = models.DecimalField(max_digits=5, decimal_places=2, default=20)
+    pdf_extra_duration = models.PositiveIntegerField(default=0)
 
     class Meta:
         db_table = 'secure_exams'

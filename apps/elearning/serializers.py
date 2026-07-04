@@ -479,7 +479,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'fullscreen_required', 'webcam_required', 'block_copy_paste',
             'max_tab_switches', 'require_student_photo', 'ai_proctoring',
             'is_published', 'pass_score_percent', 'coefficient',
-            'max_score', 'subject_file', 'exam_pdf',
+            'max_score', 'subject_file', 'exam_pdf', 'pdf_extra_duration',
             'is_available', 'my_session', 'is_active', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
