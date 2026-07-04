@@ -30,7 +30,7 @@ from .serializers import (
     AssignmentSubmissionSerializer, AssignmentCorrectionSerializer,
     CreateZoomMeetingSerializer,
     LibraryDocumentSerializer, DocumentFavoriteSerializer, ReadingProgressSerializer,
-    SecureExamSerializer, ExamSessionSerializer,
+    SecureExamSerializer, ExamSessionSerializer, ExamSnapshotSerializer,
     VirtualLabSerializer, LabSubmissionSerializer,
     AIConversationSerializer, AIConversationListSerializer, AIMessageSerializer,
     AISendMessageSerializer, AIGenerateSerializer, AIGradeSubmissionSerializer,
@@ -960,7 +960,18 @@ class SecureExamViewSet(viewsets.ModelViewSet):
 
 
 class ExamSessionSnapshotView(APIView):
-    """POST /elearning/exams/sessions/<session_id>/snapshot/ — Upload webcam snapshot."""
+    """POST /elearning/exams/sessions/<session_id>/snapshot/ — student uploads a webcam snapshot.
+    GET  /elearning/exams/sessions/<session_id>/snapshot/ — admin/teacher reviews all snapshots
+    (with AI analysis) captured for that session, most recent first.
+    """
+
+    def get(self, request, session_id):
+        try:
+            session = ExamSession.objects.get(id=session_id)
+        except ExamSession.DoesNotExist:
+            return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        snapshots = session.snapshots.all()
+        return Response(ExamSnapshotSerializer(snapshots, many=True, context={'request': request}).data)
 
     def post(self, request, session_id):
         try:

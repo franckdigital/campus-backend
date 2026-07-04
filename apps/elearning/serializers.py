@@ -4,7 +4,7 @@ from .models import (
     Quiz, Question, Choice, QuizAttempt, AttemptAnswer,
     Assignment, AssignmentSubmission, AssignmentCorrection,
     LibraryDocument, DocumentFavorite, ReadingProgress,
-    SecureExam, ExamSession,
+    SecureExam, ExamSession, ExamSnapshot,
     VirtualLab, LabSubmission,
     AIConversation, AIMessage,
     VideoLibrary, VideoSubtitle, VideoProgress, VideoDownloadToken,
@@ -566,6 +566,12 @@ class ExamSessionSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'started_at', 'created_at', 'events_log',
                             'tab_switch_count', 'fullscreen_exit_count',
                             'copy_attempt_count', 'focus_lost_count']
+
+
+class ExamSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExamSnapshot
+        fields = ['id', 'image', 'taken_at', 'face_detected', 'phone_detected', 'ai_analysis']
 
 
 # ─────────────────────────────────────────────────────────────────────────────

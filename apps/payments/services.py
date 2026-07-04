@@ -126,51 +126,107 @@ class CinetPayService:
         to_sign = f"{self.site_id}{data.get('cpm_trans_id', '')}{data.get('cpm_trans_date', '')}{data.get('cpm_amount', '')}{self.secret_key}"
         computed_signature = hashlib.sha256(to_sign.encode()).hexdigest()
         return hmac.compare_digest(computed_signature, signature)
-    
+
+    @staticmethod
+    def finalize_success_payment(transaction, payment_method_code, payment_method_name, reference, notes):
+        """Create the Payment and mark the transaction SUCCESS.
+
+        Shared by the webhook callback, the sandbox test flow, the demo
+        fallback, and status-check reconciliation, so they can't drift out of
+        sync with each other. Does NOT call invoice.add_payment(): the
+        Payment post_save signal (apps.finance.signals.on_payment_save)
+        already recomputes invoice.amount_paid from the sum of all SUCCESS
+        payments on the invoice — calling add_payment() here on top of that
+        double-counts every single Mobile Money payment.
+        """
+        method, _ = PaymentMethod.objects.get_or_create(
+            code=payment_method_code,
+            defaults={'name': payment_method_name, 'is_online': True}
+        )
+        payment = Payment.objects.create(
+            invoice=transaction.invoice,
+            payment_method=method,
+            amount=transaction.amount,
+            status='SUCCESS',
+            reference=reference,
+            notes=notes,
+            validated_at=timezone.now(),
+        )
+        transaction.status = 'SUCCESS'
+        transaction.payment = payment
+        transaction.completed_at = timezone.now()
+        transaction.save()
+        return payment
+
+    def reconcile_from_verification(self, transaction, verification):
+        """If CinetPay's own /payment/check confirms success but our local
+        transaction is still pending — e.g. the IPN webhook never reached us,
+        got dropped, or was retried past our window — finalize it here. Same
+        end effect as process_callback(), just triggered by polling
+        (CinetPayStatusView / check_status) instead of the webhook, so a
+        payment CinetPay actually captured doesn't sit invisible forever.
+
+        NOTE: this checks CinetPay's *v2 check API* response shape
+        ({"code": "00", "data": {"status": "ACCEPTED", "amount": ...}}), which
+        uses different field names than the webhook's cpm_* payload. Verify
+        this against a real CinetPay test transaction before fully trusting
+        it in production — adjust the field names below if they don't match.
+        """
+        if transaction.status == 'SUCCESS' or not isinstance(verification, dict):
+            return transaction
+
+        payload = verification.get('data') or {}
+        is_success = (
+            verification.get('code') == '00'
+            and str(payload.get('status', '')).upper() == 'ACCEPTED'
+        )
+        if not is_success:
+            return transaction
+
+        try:
+            verified_amount = int(float(payload.get('amount', transaction.amount)))
+        except (TypeError, ValueError):
+            verified_amount = None
+
+        if verified_amount is not None and verified_amount != int(transaction.amount):
+            # Amount mismatch — don't auto-trust it, leave for manual review.
+            return transaction
+
+        self.finalize_success_payment(
+            transaction,
+            payment_method_code='CINETPAY',
+            payment_method_name='CinetPay Mobile Money',
+            reference=transaction.transaction_id,
+            notes='Paiement CinetPay — confirmé par vérification (callback jamais reçu)',
+        )
+        return transaction
+
     def process_callback(self, data):
         """Process CinetPay callback."""
         transaction_id = data.get('cpm_trans_id')
-        
+
         try:
             transaction = CinetPayTransaction.objects.get(transaction_id=transaction_id)
         except CinetPayTransaction.DoesNotExist:
             return {'success': False, 'error': 'Transaction not found'}
-        
+
         transaction.callback_data = data
-        
+
         cpm_result = data.get('cpm_result', '')
         cpm_amount = data.get('cpm_amount', 0)
-        
+
         if cpm_result == '00' and int(cpm_amount) == int(transaction.amount):
-            transaction.status = 'SUCCESS'
-            transaction.completed_at = timezone.now()
             transaction.payment_method = data.get('payment_method', '')
             transaction.operator_id = data.get('operator_id', '')
-            
-            cinetpay_method = PaymentMethod.objects.filter(code='CINETPAY').first()
-            if not cinetpay_method:
-                cinetpay_method = PaymentMethod.objects.create(
-                    name='CinetPay Mobile Money',
-                    code='CINETPAY',
-                    is_online=True,
-                    requires_verification=True
-                )
-            
-            payment = Payment.objects.create(
-                invoice=transaction.invoice,
-                payment_method=cinetpay_method,
-                amount=transaction.amount,
-                status='SUCCESS',
+            transaction.save(update_fields=['callback_data', 'payment_method', 'operator_id'])
+
+            self.finalize_success_payment(
+                transaction,
+                payment_method_code='CINETPAY',
+                payment_method_name='CinetPay Mobile Money',
                 reference=transaction.transaction_id,
                 notes=f"Paiement CinetPay - {data.get('payment_method', 'Mobile Money')}",
-                validated_at=timezone.now()
             )
-            
-            transaction.payment = payment
-            transaction.save()
-            
-            transaction.invoice.add_payment(transaction.amount)
-            
             return {'success': True, 'transaction': transaction}
         else:
             transaction.status = 'FAILED'

@@ -898,6 +898,30 @@ class ExamSession(BaseModel):
             self.copy_attempt_count += 1
         elif event_type == 'FOCUS_LOST':
             self.focus_lost_count += 1
+        elif event_type == 'AI_FLAG':
+            # Webcam-based anomaly (no face / phone visible / multiple faces).
+            # Flag for teacher review but don't auto-close the session like the
+            # tab-switch threshold does — a single vision-model reading can be
+            # a false positive (bad lighting, glancing away), so a human should
+            # make the final call here rather than ending the exam outright.
+            self.is_flagged = True
+            tag = f"Webcam: {details or 'Anomalie détectée'}"
+            if not self.flag_reason:
+                self.flag_reason = tag
+            elif tag not in self.flag_reason:
+                self.flag_reason = f"{self.flag_reason} · {tag}"
+        elif event_type == 'WEBCAM_LOST':
+            # Camera stopped working after the student already passed the
+            # pre-flight check on the intro screen (unplugged, disabled,
+            # crashed...). Flag for review rather than auto-close: could be a
+            # genuine hardware hiccup, but the teacher should know monitoring
+            # was interrupted before grading the attempt.
+            self.is_flagged = True
+            tag = f"Webcam: {details or 'Caméra perdue pendant l\'examen'}"
+            if not self.flag_reason:
+                self.flag_reason = tag
+            elif tag not in self.flag_reason:
+                self.flag_reason = f"{self.flag_reason} · {tag}"
 
         max_sw = self.exam.max_tab_switches
         if max_sw and self.tab_switch_count > max_sw:

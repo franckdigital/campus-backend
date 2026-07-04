@@ -35,6 +35,9 @@ class CinetPayTransactionViewSet(viewsets.ReadOnlyModelViewSet):
         transaction = self.get_object()
         service = CinetPayService(transaction.invoice.site)
         result = service.verify_payment(transaction.transaction_id)
+        # Self-heal: if CinetPay confirms success but our webhook never
+        # arrived, reconcile now instead of leaving the transaction stuck.
+        service.reconcile_from_verification(transaction, result)
         return Response(result)
 
 
@@ -146,6 +149,10 @@ class CinetPayStatusView(APIView):
 
         service = CinetPayService(transaction.invoice.site)
         verification = service.verify_payment(transaction_id)
+        # Self-heal: if CinetPay confirms success but our webhook never
+        # arrived, reconcile now instead of leaving the transaction stuck.
+        service.reconcile_from_verification(transaction, verification)
+        transaction.refresh_from_db()
 
         return Response({
             'transaction': CinetPayTransactionSerializer(transaction).data,
@@ -164,8 +171,6 @@ class CinetPaySandboxSuccessView(APIView):
     def get(self, request):
         from django.conf import settings
         from django.http import HttpResponse
-        from apps.finance.models import Payment, PaymentMethod
-        from django.utils import timezone
 
         if not getattr(settings, 'CINETPAY_LOCAL_SANDBOX', False):
             return HttpResponse('Sandbox désactivé.', status=403)
@@ -179,25 +184,13 @@ class CinetPaySandboxSuccessView(APIView):
             return HttpResponse('Transaction introuvable.', status=404)
 
         if transaction.status != 'SUCCESS':
-            # Créer le Payment et valider la facture
-            cinetpay_method, _ = PaymentMethod.objects.get_or_create(
-                code='CINETPAY',
-                defaults={'name': 'CinetPay Mobile Money', 'is_online': True}
-            )
-            payment = Payment.objects.create(
-                invoice=transaction.invoice,
-                payment_method=cinetpay_method,
-                amount=transaction.amount,
-                status='SUCCESS',
+            CinetPayService.finalize_success_payment(
+                transaction,
+                payment_method_code='CINETPAY',
+                payment_method_name='CinetPay Mobile Money',
                 reference=transaction.transaction_id,
                 notes='Paiement sandbox (test)',
-                validated_at=timezone.now()
             )
-            transaction.status = 'SUCCESS'
-            transaction.payment = payment
-            transaction.completed_at = timezone.now()
-            transaction.save()
-            transaction.invoice.add_payment(transaction.amount)
 
         student = transaction.invoice.student.user
         html = f"""<!DOCTYPE html>
@@ -243,9 +236,6 @@ class CinetPayDemoPayView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        from apps.finance.models import Payment, PaymentMethod
-        from django.utils import timezone
-
         transaction_id = request.data.get('transaction_id', '').strip()
         if not transaction_id:
             return Response({'detail': 'transaction_id requis'}, status=status.HTTP_400_BAD_REQUEST)
@@ -269,24 +259,13 @@ class CinetPayDemoPayView(APIView):
                 'invoice_number': transaction.invoice.invoice_number,
             })
 
-        demo_method, _ = PaymentMethod.objects.get_or_create(
-            code='CINETPAY_DEMO',
-            defaults={'name': 'CinetPay (Test)', 'is_online': True}
-        )
-        payment = Payment.objects.create(
-            invoice=transaction.invoice,
-            payment_method=demo_method,
-            amount=transaction.amount,
-            status='SUCCESS',
+        CinetPayService.finalize_success_payment(
+            transaction,
+            payment_method_code='CINETPAY_DEMO',
+            payment_method_name='CinetPay (Test)',
             reference=f"DEMO-{transaction.transaction_id}",
             notes='Paiement test (CinetPay temporairement inaccessible)',
-            validated_at=timezone.now(),
         )
-        transaction.status = 'SUCCESS'
-        transaction.payment = payment
-        transaction.completed_at = timezone.now()
-        transaction.save()
-        transaction.invoice.add_payment(transaction.amount)
 
         return Response({
             'success': True,
