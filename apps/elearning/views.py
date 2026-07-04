@@ -615,7 +615,11 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             if progress:
                 progress.evaluate_completion()
 
-        return Response(QuizAttemptSerializer(attempt).data)
+        # Re-fetch from DB so serializer gets fresh graded answers (not stale prefetch)
+        fresh = QuizAttempt.objects.prefetch_related(
+            'answers__question', 'answers__selected_choices'
+        ).get(pk=attempt.pk)
+        return Response(QuizAttemptSerializer(fresh).data)
 
 
 class AssignmentViewSet(viewsets.ModelViewSet):
