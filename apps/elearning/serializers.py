@@ -461,6 +461,14 @@ class SecureExamSerializer(serializers.ModelSerializer):
     exam_pdf = serializers.SerializerMethodField()
     my_session = serializers.SerializerMethodField()
 
+    def to_internal_value(self, data):
+        # When frontend sends subject_file as a string URL (existing file), strip it.
+        # Actual file uploads arrive as InMemoryUploadedFile, not strings.
+        if isinstance(data.get('subject_file'), str):
+            data = data.copy() if hasattr(data, 'copy') else dict(data)
+            data.pop('subject_file', None)
+        return super().to_internal_value(data)
+
     class Meta:
         model = SecureExam
         fields = [

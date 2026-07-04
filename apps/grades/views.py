@@ -523,12 +523,19 @@ class GradeViewSet(viewsets.ModelViewSet):
 
 
 class ReportCardViewSet(viewsets.ModelViewSet):
-    queryset = ReportCard.objects.select_related(
-        'student__user', 'class_group', 'semester__academic_year'
-    ).all()
     serializer_class = ReportCardSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['student', 'class_group', 'semester', 'status', 'is_published', 'semester__academic_year']
+
+    def get_queryset(self):
+        qs = ReportCard.objects.select_related(
+            'student__user', 'class_group', 'semester__academic_year'
+        )
+        # Students only see published bulletins — avoids needing frontend filter update
+        user = self.request.user
+        if hasattr(user, 'student_profile') and not user.is_staff:
+            qs = qs.filter(is_published=True)
+        return qs
 
     @action(detail=False, methods=['post'])
     def generate(self, request):
