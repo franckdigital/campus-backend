@@ -790,7 +790,7 @@ class SecureExam(BaseModel):
     fullscreen_required = models.BooleanField(default=True)
     webcam_required = models.BooleanField(default=False)
     block_copy_paste = models.BooleanField(default=True)
-    max_tab_switches = models.PositiveIntegerField(default=3)
+    max_tab_switches = models.PositiveIntegerField(default=1)
     require_student_photo = models.BooleanField(default=False)
     ai_proctoring = models.BooleanField(default=False)
 
