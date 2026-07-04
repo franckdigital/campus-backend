@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.utils import timezone
-from django.db.models import Sum
+from django.db.models import Sum, Prefetch
 
 from .models import (
     FeeType, Invoice, InvoiceItem, PaymentMethod, Payment,
@@ -43,7 +43,10 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
 class InvoiceViewSet(viewsets.ModelViewSet):
     queryset = Invoice.objects.select_related(
         'student__user', 'site', 'academic_year', 'created_by'
-    ).prefetch_related('items', 'payments').all()
+    ).prefetch_related(
+        Prefetch('items', queryset=InvoiceItem.objects.select_related('fee_type')),
+        Prefetch('payments', queryset=Payment.objects.select_related('payment_method')),
+    ).all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['invoice_number', 'student__matricule', 'student__user__first_name']
     ordering_fields = ['issue_date', 'due_date', 'total', 'status']

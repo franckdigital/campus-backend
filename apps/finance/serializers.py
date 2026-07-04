@@ -104,17 +104,23 @@ class InvoiceListSerializer(serializers.ModelSerializer):
         ]
 
     def get_has_payment_proof(self, obj):
-        return obj.payments.filter(proof__isnull=False).exclude(proof='').exists()
+        # Iterate the prefetched cache (obj.payments.all()) instead of .filter(),
+        # which would issue a fresh query per invoice and defeat the ViewSet's
+        # prefetch_related('payments').
+        return any(p.proof for p in obj.payments.all())
 
     def get_last_payment_method(self, obj):
-        last_payment = obj.payments.filter(status='SUCCESS').order_by('-payment_date').first()
-        return last_payment.payment_method.name if last_payment else None
+        success_payments = [p for p in obj.payments.all() if p.status == 'SUCCESS']
+        if not success_payments:
+            return None
+        last_payment = max(success_payments, key=lambda p: p.payment_date)
+        return last_payment.payment_method.name if last_payment.payment_method_id else None
 
     def get_fee_type_codes(self, obj):
-        return list(
-            obj.items.select_related('fee_type')
-            .values_list('fee_type__code', flat=True)
-        )
+        # Iterate the prefetched cache (obj.items.all()) instead of chaining
+        # select_related/values_list, which would issue a fresh query per
+        # invoice and defeat the ViewSet's prefetch_related('items').
+        return [item.fee_type.code for item in obj.items.all()]
 
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):

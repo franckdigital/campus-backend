@@ -87,10 +87,6 @@ class Class(BaseModel):
     def __str__(self):
         return f"{self.code} - {self.name} ({self.academic_year.code})"
 
-    @property
-    def student_count(self):
-        return self.enrollments.filter(is_active=True).count()
-
 
 class Subject(BaseModel):
     """Subject/Matière model."""

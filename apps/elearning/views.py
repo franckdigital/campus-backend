@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Q, Count, Avg
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -117,6 +117,20 @@ class LessonViewSet(viewsets.ModelViewSet):
             return LessonListSerializer
         return LessonSerializer
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # Pre-fetch this student's completed-lesson IDs once for the whole list
+        # instead of LessonListSerializer hitting progress_records per row.
+        if self.action == 'list':
+            student = getattr(self.request.user, 'student_profile', None)
+            if student:
+                context['completed_lesson_ids'] = set(
+                    LessonProgress.objects.filter(
+                        student=student, is_completed=True
+                    ).values_list('lesson_id', flat=True)
+                )
+        return context
+
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
         lesson = self.get_object()
@@ -181,7 +195,7 @@ class LessonViewSet(viewsets.ModelViewSet):
         for lesson in lessons:
             completions = LessonProgress.objects.filter(lesson=lesson, is_completed=True).count()
             started     = LessonProgress.objects.filter(lesson=lesson).exclude(started_at=None).count()
-            avg_pct     = LessonProgress.objects.filter(lesson=lesson).aggregate(a=models.Avg('watch_percent'))['a'] or 0
+            avg_pct     = LessonProgress.objects.filter(lesson=lesson).aggregate(a=Avg('watch_percent'))['a'] or 0
             result.append({
                 'lesson_id':     str(lesson.id),
                 'title':         lesson.title,
@@ -342,6 +356,19 @@ class QuizViewSet(viewsets.ModelViewSet):
             return QuizListSerializer
         return QuizSerializer
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # Pre-fetch this student's attempts once for the whole list instead of
+        # QuizListSerializer hitting the DB twice per quiz (attempts_used, best_score).
+        if self.action == 'list':
+            student = getattr(self.request.user, 'student_profile', None)
+            if student:
+                attempts_by_quiz = {}
+                for a in QuizAttempt.objects.filter(student=student):
+                    attempts_by_quiz.setdefault(a.quiz_id, []).append(a)
+                context['my_attempts_by_quiz'] = attempts_by_quiz
+        return context
+
     @action(detail=True, methods=['get'])
     def take(self, request, pk=None):
         """Sanitized quiz (no correct answers) for a student about to attempt it."""
@@ -398,15 +425,23 @@ class QuizViewSet(viewsets.ModelViewSet):
 
         total = attempts.count()
         passed = attempts.filter(is_passed=True).count()
-        avg_score = attempts.aggregate(avg=models.Avg('percent'))['avg'] or 0
+        avg_score = attempts.aggregate(avg=Avg('percent'))['avg'] or 0
 
-        # Per-question stats
+        # Per-question stats — one aggregated query for all questions instead
+        # of 3 queries (total/correct/pending) per question in a loop.
+        answer_stats = AttemptAnswer.objects.filter(
+            question__quiz=quiz, attempt__submitted_at__isnull=False
+        ).values('question_id').annotate(
+            total=Count('id'),
+            correct=Count('id', filter=Q(is_correct=True)),
+            pending=Count('id', filter=Q(is_correct__isnull=True)),
+        )
+        stats_by_question = {row['question_id']: row for row in answer_stats}
+
         questions_stats = []
         for q in quiz.questions.filter(is_active=True).order_by('order'):
-            q_answers = AttemptAnswer.objects.filter(question=q, attempt__submitted_at__isnull=False)
-            q_total = q_answers.count()
-            q_correct = q_answers.filter(is_correct=True).count()
-            q_pending = q_answers.filter(is_correct__isnull=True).count()
+            row = stats_by_question.get(q.id, {'total': 0, 'correct': 0, 'pending': 0})
+            q_total, q_correct, q_pending = row['total'], row['correct'], row['pending']
             questions_stats.append({
                 'id': str(q.id),
                 'text': q.text[:100],
@@ -838,6 +873,18 @@ class SecureExamViewSet(viewsets.ModelViewSet):
     ordering_fields = ['start_date', 'created_at']
     filterset_fields = ['class_obj', 'subject', 'exam_type', 'is_published', 'is_active']
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # Pre-fetch this student's exam sessions once for the whole list
+        # instead of SecureExamSerializer.get_my_session hitting the DB per exam.
+        if self.action == 'list':
+            student = getattr(self.request.user, 'student_profile', None)
+            if student:
+                context['my_sessions_by_exam'] = {
+                    s.exam_id: s for s in ExamSession.objects.filter(student=student)
+                }
+        return context
+
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
         exam = self.get_object()
@@ -1033,12 +1080,27 @@ class ExamSessionSubmitFileView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class VirtualLabViewSet(viewsets.ModelViewSet):
-    queryset = VirtualLab.objects.select_related('class_obj', 'subject', 'lesson').all()
+    queryset = VirtualLab.objects.select_related('class_obj', 'subject', 'lesson').annotate(
+        submission_count=Count('submissions')
+    ).all()
     serializer_class = VirtualLabSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title', 'description', 'instructions']
     ordering_fields = ['order', 'due_date', 'created_at']
     filterset_fields = ['class_obj', 'subject', 'lesson', 'lab_type', 'is_published', 'is_active']
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # Pre-fetch this student's lab submissions once for the whole list
+        # instead of VirtualLabSerializer.get_my_submission hitting the DB per lab.
+        if self.action == 'list':
+            student = getattr(self.request.user, 'student_profile', None)
+            if student:
+                latest = {}
+                for sub in LabSubmission.objects.filter(student=student).order_by('-started_at'):
+                    latest.setdefault(sub.lab_id, sub)
+                context['my_submissions_by_lab'] = latest
+        return context
 
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):

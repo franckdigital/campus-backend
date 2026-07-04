@@ -18,7 +18,9 @@ class SemesterSerializer(serializers.ModelSerializer):
 
 class ProgramSerializer(serializers.ModelSerializer):
     site_name = serializers.CharField(source='site.name', read_only=True)
-    levels_count = serializers.SerializerMethodField()
+    # Populated by an annotate(levels_count=Count(...)) on the ViewSet's
+    # queryset instead of a per-row .count() query.
+    levels_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Program
@@ -29,15 +31,14 @@ class ProgramSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
-    def get_levels_count(self, obj):
-        return obj.levels.count()
-
 
 class LevelSerializer(serializers.ModelSerializer):
     program_name = serializers.CharField(source='program.name', read_only=True)
     program_code = serializers.CharField(source='program.code', read_only=True)
-    classes_count = serializers.SerializerMethodField()
-    subjects_count = serializers.SerializerMethodField()
+    # Populated by annotate(classes_count=..., subjects_count=...) on the
+    # ViewSet's queryset instead of two per-row .count() queries.
+    classes_count = serializers.IntegerField(read_only=True, default=0)
+    subjects_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Level
@@ -47,15 +48,11 @@ class LevelSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
-    def get_classes_count(self, obj):
-        return obj.classes.filter(is_active=True).count()
-
-    def get_subjects_count(self, obj):
-        return obj.level_subjects.filter(is_active=True).count()
-
 
 class SubjectSerializer(serializers.ModelSerializer):
-    levels_count = serializers.SerializerMethodField()
+    # Populated by an annotate(levels_count=Count(...)) on the ViewSet's
+    # queryset instead of a per-row .count() query.
+    levels_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Subject
@@ -64,9 +61,6 @@ class SubjectSerializer(serializers.ModelSerializer):
             'hours_per_week', 'levels_count', 'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
-
-    def get_levels_count(self, obj):
-        return obj.level_subjects.filter(is_active=True).count()
 
 
 class TeacherSiteSerializer(serializers.ModelSerializer):
@@ -204,7 +198,7 @@ class ClassSerializer(serializers.ModelSerializer):
     site_name = serializers.CharField(source='site.name', read_only=True)
     academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
     main_teacher_name = serializers.CharField(source='main_teacher.user.full_name', read_only=True)
-    student_count = serializers.IntegerField(read_only=True)
+    student_count = serializers.IntegerField(read_only=True, default=0)
     subject_teachers = ClassSubjectTeacherSerializer(many=True, read_only=True)
 
     class Meta:
@@ -222,7 +216,7 @@ class ClassListSerializer(serializers.ModelSerializer):
     level_name = serializers.CharField(source='level.name', read_only=True)
     site_name = serializers.CharField(source='site.name', read_only=True)
     academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
-    student_count = serializers.IntegerField(read_only=True)
+    student_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Class

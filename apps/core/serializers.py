@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Site, AcademicYear, AuditLog, SystemConfig
+from .models import Site, AcademicYear, AuditLog, SystemConfig, WorkspaceSettings
 
 
 class SiteSerializer(serializers.ModelSerializer):
@@ -58,3 +58,14 @@ class SystemConfigPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = SystemConfig
         fields = ['key', 'value']
+
+
+class WorkspaceSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkspaceSettings
+        fields = [
+            'id', 'app_name', 'app_subtitle', 'logo', 'primary_color',
+            'font_size', 'compact_mode', 'language', 'date_format',
+            'items_per_page', 'updated_at',
+        ]
+        read_only_fields = ['id', 'updated_at']

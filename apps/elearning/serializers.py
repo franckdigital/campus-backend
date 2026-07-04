@@ -108,21 +108,34 @@ class QuizListSerializer(serializers.ModelSerializer):
         ]
 
     def get_question_count(self, obj):
-        return obj.questions.filter(is_active=True).count()
+        # Iterate the prefetched cache (obj.questions.all()) instead of
+        # .filter().count(), which would issue a fresh query per quiz and
+        # defeat the ViewSet's prefetch_related('questions__choices').
+        return len([q for q in obj.questions.all() if q.is_active])
+
+    def _my_attempts(self, obj):
+        """Pre-fetched (list action) or fall back to a per-quiz query."""
+        attempts_map = self.context.get('my_attempts_by_quiz')
+        if attempts_map is not None:
+            return attempts_map.get(obj.id, [])
+        request = self.context.get('request')
+        student = request.user.student_profile
+        return list(obj.attempts.filter(student=student))
 
     def get_attempts_used(self, obj):
         request = self.context.get('request')
         if not request or not hasattr(request.user, 'student_profile'):
             return 0
-        return obj.attempts.filter(student=request.user.student_profile).count()
+        return len(self._my_attempts(obj))
 
     def get_best_score(self, obj):
         request = self.context.get('request')
         if not request or not hasattr(request.user, 'student_profile'):
             return None
-        best = obj.attempts.filter(student=request.user.student_profile, submitted_at__isnull=False).order_by('-percent').first()
-        if best is None:
+        candidates = [a for a in self._my_attempts(obj) if a.submitted_at is not None]
+        if not candidates:
             return None
+        best = max(candidates, key=lambda a: (a.percent or 0))
         return {'percent': float(best.percent or 0), 'is_passed': best.is_passed}
 
 
@@ -241,13 +254,13 @@ class _LessonStudentMixin:
         student = self._student()
         if not student:
             return True
-        return obj.is_unlocked_for(student)
+        return obj.is_unlocked_for(student, self.context.get('completed_lesson_ids'))
 
     def get_is_completed(self, obj):
         student = self._student()
         if not student:
             return False
-        return obj.is_completed_by(student)
+        return obj.is_completed_by(student, self.context.get('completed_lesson_ids'))
 
 
 class LessonSerializer(_LessonStudentMixin, serializers.ModelSerializer):
@@ -361,7 +374,11 @@ class AssignmentListSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if not request or not hasattr(request.user, 'student_profile'):
             return None
-        sub = obj.submissions.filter(student=request.user.student_profile).first()
+        student = request.user.student_profile
+        # Iterate the prefetched cache (obj.submissions.all()) instead of
+        # .filter(), which would issue a fresh query per assignment and defeat
+        # the ViewSet's prefetch_related('submissions', 'submissions__correction').
+        sub = next((s for s in obj.submissions.all() if s.student_id == student.id), None)
         if not sub:
             return None
         correction = getattr(sub, 'correction', None)
@@ -505,8 +522,14 @@ class SecureExamSerializer(serializers.ModelSerializer):
         if not request or not hasattr(request.user, 'student_profile'):
             return None
         try:
-            student = request.user.student_profile
-            session = obj.sessions.filter(student=student).order_by('-started_at').first()
+            # When the ViewSet has pre-fetched all of this student's sessions
+            # (list action), use that instead of one query per exam.
+            sessions_map = self.context.get('my_sessions_by_exam')
+            if sessions_map is not None:
+                session = sessions_map.get(obj.id)
+            else:
+                student = request.user.student_profile
+                session = obj.sessions.filter(student=student).order_by('-started_at').first()
             if session:
                 return {
                     'id': str(session.id),
@@ -553,7 +576,11 @@ class VirtualLabSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source='class_obj.name', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     lab_type_label = serializers.CharField(source='get_lab_type_display', read_only=True)
-    submission_count = serializers.SerializerMethodField()
+    # Populated by an annotate(submission_count=Count('submissions')) on the
+    # ViewSet's queryset instead of a per-row .count() query. default=0 covers
+    # create/update responses, whose instance isn't re-fetched through that
+    # annotated queryset.
+    submission_count = serializers.IntegerField(read_only=True, default=0)
     my_submission = serializers.SerializerMethodField()
 
     class Meta:
@@ -570,9 +597,6 @@ class VirtualLabSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at']
 
-    def get_submission_count(self, obj):
-        return obj.submissions.count()
-
     def get_my_submission(self, obj):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
@@ -580,7 +604,13 @@ class VirtualLabSerializer(serializers.ModelSerializer):
         student = getattr(request.user, 'student_profile', None)
         if not student:
             return None
-        sub = obj.submissions.filter(student=student).order_by('-started_at').first()
+        # When the ViewSet has pre-fetched all of this student's submissions
+        # (list action), use that instead of one query per lab.
+        submissions_map = self.context.get('my_submissions_by_lab')
+        if submissions_map is not None:
+            sub = submissions_map.get(obj.id)
+        else:
+            sub = obj.submissions.filter(student=student).order_by('-started_at').first()
         if not sub:
             return None
         return {'id': str(sub.id), 'status': sub.status, 'score': sub.score}

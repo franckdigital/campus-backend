@@ -82,17 +82,17 @@ class Chapter(BaseModel):
             class_obj=self.class_obj, subject=self.subject, is_active=True
         ).order_by('order')
 
-    def is_completed_by(self, student):
+    def is_completed_by(self, student, completed_ids=None):
         lessons = self.lessons.filter(is_active=True, is_published=True)
         if not lessons.exists():
             return True
-        return all(l.is_completed_by(student) for l in lessons)
+        return all(l.is_completed_by(student, completed_ids) for l in lessons)
 
-    def is_unlocked_for(self, student):
+    def is_unlocked_for(self, student, completed_ids=None):
         prev = self._siblings().filter(order__lt=self.order).last()
         if not prev:
             return True
-        return prev.is_completed_by(student)
+        return prev.is_completed_by(student, completed_ids)
 
 
 class Lesson(BaseModel):
@@ -166,17 +166,22 @@ class Lesson(BaseModel):
             is_active=True, is_published=True
         ).order_by('order')
 
-    def is_completed_by(self, student):
+    def is_completed_by(self, student, completed_ids=None):
+        # completed_ids, when provided, is a pre-fetched set of this student's
+        # completed lesson IDs (one query for a whole list) — used to avoid a
+        # progress_records query per lesson when serializing a list of lessons.
+        if completed_ids is not None:
+            return self.id in completed_ids
         progress = self.progress_records.filter(student=student).first()
         return bool(progress and progress.is_completed)
 
-    def is_unlocked_for(self, student):
-        if self.chapter_id and not self.chapter.is_unlocked_for(student):
+    def is_unlocked_for(self, student, completed_ids=None):
+        if self.chapter_id and not self.chapter.is_unlocked_for(student, completed_ids):
             return False
         prev = self._siblings().filter(order__lt=self.order).last()
         if not prev:
             return True
-        return prev.is_completed_by(student)
+        return prev.is_completed_by(student, completed_ids)
 
 
 class LessonAttachment(BaseModel):
@@ -583,7 +588,10 @@ class Assignment(BaseModel):
 
     @property
     def submission_count(self):
-        return self.submissions.count()
+        # len() on the prefetched cache instead of .count(), which would
+        # always issue a fresh COUNT query even when submissions were
+        # already prefetched by the ViewSet.
+        return len(self.submissions.all())
 
 
 class AssignmentSubmission(BaseModel):

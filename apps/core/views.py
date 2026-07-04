@@ -1,14 +1,16 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 
-from .models import Site, AcademicYear, AuditLog, SystemConfig
+from .models import Site, AcademicYear, AuditLog, SystemConfig, WorkspaceSettings
 from .serializers import (
     SiteSerializer, SiteListSerializer,
     AcademicYearSerializer, AuditLogSerializer,
-    SystemConfigSerializer, SystemConfigPublicSerializer
+    SystemConfigSerializer, SystemConfigPublicSerializer,
+    WorkspaceSettingsSerializer,
 )
 
 
@@ -91,4 +93,27 @@ class SystemConfigViewSet(viewsets.ModelViewSet):
         """Get public configurations."""
         configs = SystemConfig.objects.filter(is_public=True, is_active=True)
         serializer = SystemConfigPublicSerializer(configs, many=True)
+        return Response(serializer.data)
+
+
+class WorkspaceSettingsView(APIView):
+    """Singleton — GET is open (branding must render before/without auth),
+    PATCH (with or without a new logo file) requires an admin."""
+
+    def get_permissions(self):
+        if self.request.method == 'PATCH':
+            return [permissions.IsAdminUser()]
+        return [permissions.AllowAny()]
+
+    def get(self, request):
+        obj = WorkspaceSettings.get_solo()
+        return Response(WorkspaceSettingsSerializer(obj, context={'request': request}).data)
+
+    def patch(self, request):
+        obj = WorkspaceSettings.get_solo()
+        serializer = WorkspaceSettingsSerializer(
+            obj, data=request.data, partial=True, context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(serializer.data)

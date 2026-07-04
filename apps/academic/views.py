@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
+from django.db.models import Count, Q
 
 from .models import (
     Program, Level, Class, Subject, TeacherProfile, TeacherSite,
@@ -28,7 +29,9 @@ class SemesterViewSet(viewsets.ModelViewSet):
 
 
 class ProgramViewSet(viewsets.ModelViewSet):
-    queryset = Program.objects.select_related('site').all()
+    queryset = Program.objects.select_related('site').annotate(
+        levels_count=Count('levels', filter=Q(levels__is_active=True))
+    ).all()
     serializer_class = ProgramSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['name', 'code']
@@ -44,7 +47,13 @@ class ProgramViewSet(viewsets.ModelViewSet):
 
 
 class LevelViewSet(viewsets.ModelViewSet):
-    queryset = Level.objects.select_related('program').all()
+    queryset = Level.objects.select_related('program').annotate(
+        # distinct=True: two Count()s over different reverse relations on the
+        # same queryset would otherwise fan out and inflate each other via the
+        # join, so each must count only its own distinct related rows.
+        classes_count=Count('classes', filter=Q(classes__is_active=True), distinct=True),
+        subjects_count=Count('level_subjects', filter=Q(level_subjects__is_active=True), distinct=True),
+    ).all()
     serializer_class = LevelSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['name', 'code']
@@ -62,7 +71,9 @@ class LevelViewSet(viewsets.ModelViewSet):
 
 
 class SubjectViewSet(viewsets.ModelViewSet):
-    queryset = Subject.objects.all()
+    queryset = Subject.objects.annotate(
+        levels_count=Count('level_subjects', filter=Q(level_subjects__is_active=True))
+    ).all()
     serializer_class = SubjectSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['name', 'code']
@@ -379,6 +390,8 @@ class TeacherViewSet(viewsets.ModelViewSet):
 class ClassViewSet(viewsets.ModelViewSet):
     queryset = Class.objects.select_related(
         'level', 'level__program', 'academic_year', 'site', 'main_teacher'
+    ).annotate(
+        student_count=Count('enrollments', filter=Q(enrollments__is_active=True))
     ).all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['name', 'code']

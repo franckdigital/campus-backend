@@ -41,6 +41,35 @@ class Site(BaseModel):
         super().save(*args, **kwargs)
 
 
+class WorkspaceSettings(BaseModel):
+    """Shared app-wide branding/interface settings (Workspace Studio) — a
+    singleton: one row for the whole platform, edited via get_solo()."""
+    app_name = models.CharField(max_length=100, default='CampusLMS')
+    app_subtitle = models.CharField(max_length=255, blank=True, default='Plateforme de gestion académique')
+    logo = models.ImageField(upload_to='workspace/', blank=True, null=True)
+    primary_color = models.CharField(max_length=7, default='#6366f1')
+    font_size = models.PositiveSmallIntegerField(default=14)
+    compact_mode = models.BooleanField(default=False)
+    language = models.CharField(max_length=5, default='fr')
+    date_format = models.CharField(max_length=20, default='DD/MM/YYYY')
+    items_per_page = models.PositiveSmallIntegerField(default=10)
+
+    class Meta:
+        db_table = 'workspace_settings'
+        verbose_name = 'Paramètres du workspace'
+        verbose_name_plural = 'Paramètres du workspace'
+
+    def __str__(self):
+        return self.app_name
+
+    @classmethod
+    def get_solo(cls):
+        obj = cls.objects.first()
+        if not obj:
+            obj = cls.objects.create()
+        return obj
+
+
 class AcademicYear(BaseModel):
     """Academic year configuration."""
     name = models.CharField(max_length=50)
