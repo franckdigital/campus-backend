@@ -2,10 +2,12 @@
 pdf_canvas_utils.py
 ────────────────────
 Génération PDF via canvas.Canvas (API bas niveau ReportLab).
-Aucun risque de conflit de style global — fonctionne sur tout serveur.
+Utilise des fichiers temporaires pour garantir un rendu correct sur tout serveur.
+canvas.Canvas écrit dans un chemin réel — pas de BytesIO (risque de flush incomplet).
 """
 
-import io
+import os
+import tempfile
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -36,6 +38,27 @@ RED     = hex_rgb('#dc2626')
 GOLD    = hex_rgb('#d97706')
 TEAL    = hex_rgb('#0f766e')
 VIOLET_BG = hex_rgb('#f5f3ff')
+
+
+# ─── Gestion du fichier temporaire ───────────────────────────────────────────
+
+def _new_canvas(pagesize=A4):
+    """Crée un canvas dans un fichier temporaire. Retourne (canvas, tmp_path)."""
+    fd, tmp_path = tempfile.mkstemp(suffix='.pdf')
+    os.close(fd)  # ferme le fd — canvas ouvre le fichier lui-même
+    c = canvas.Canvas(tmp_path, pagesize=pagesize)
+    return c, tmp_path
+
+def _finalize(c, tmp_path):
+    """Sauvegarde le canvas, lit les bytes, supprime le fichier. Retourne bytes."""
+    c.save()
+    with open(tmp_path, 'rb') as f:
+        data = f.read()
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    return data
 
 
 # ─── Helpers bas niveau ───────────────────────────────────────────────────────
@@ -129,8 +152,7 @@ def generate_student_submission_pdf(student_name, assignment_title, sections):
     Génère la copie d'un étudiant.
     sections: list of (title: str, body: str)
     """
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
+    c, tmp_path = _new_canvas()
 
     text_w = MARGIN_R - MARGIN_L
 
@@ -185,8 +207,7 @@ def generate_student_submission_pdf(student_name, assignment_title, sections):
               size=8, color=GRAY, align='center')
 
     draw_page_footer(c, page, page)
-    c.save()
-    return buf.getvalue()
+    return _finalize(c, tmp_path)
 
 
 def generate_correction_pdf(student_name, assignment_title, score, max_score, feedback, corrections):
@@ -194,8 +215,7 @@ def generate_correction_pdf(student_name, assignment_title, score, max_score, fe
     Génère la correction du professeur.
     corrections: list of (label: str, comment: str)
     """
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
+    c, tmp_path = _new_canvas()
 
     text_w = MARGIN_R - MARGIN_L
     pct = score / max_score * 100 if max_score > 0 else 0
@@ -267,8 +287,7 @@ def generate_correction_pdf(student_name, assignment_title, score, max_score, fe
               size=8, color=GRAY, align='center')
 
     draw_page_footer(c, 1, 1)
-    c.save()
-    return buf.getvalue()
+    return _finalize(c, tmp_path)
 
 
 def generate_exam_subject_pdf(title, questions_list, meta_info=None, intro=''):
@@ -277,8 +296,7 @@ def generate_exam_subject_pdf(title, questions_list, meta_info=None, intro=''):
     questions_list: list of (q_label: str, q_text: str)
     meta_info: dict {label: value}
     """
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
+    c, tmp_path = _new_canvas()
 
     text_w = MARGIN_R - MARGIN_L
 
@@ -351,5 +369,4 @@ def generate_exam_subject_pdf(title, questions_list, meta_info=None, intro=''):
         y -= 0.4*cm
 
     draw_page_footer(c, page, page)
-    c.save()
-    return buf.getvalue()
+    return _finalize(c, tmp_path)
