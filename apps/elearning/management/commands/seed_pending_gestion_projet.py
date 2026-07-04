@@ -10,12 +10,15 @@ Usage :
     python manage.py seed_pending_gestion_projet --class-code BTS-M1
 """
 
-import io
 import random
 from django.core.management.base import BaseCommand
 from django.core.files.base import ContentFile
 from django.utils import timezone
 from datetime import timedelta
+
+from apps.elearning.management.commands.pdf_canvas_utils import (
+    generate_exam_subject_pdf as _gen_subject,
+)
 
 
 # ─── Définition des 5 sujets ──────────────────────────────────────────────────
@@ -205,124 +208,11 @@ SUBJECTS_DATA = [
 ]
 
 
-# ─── Générateur PDF sujet ─────────────────────────────────────────────────────
 
 def generate_subject_pdf(title, intro, questions_list, meta_info=None):
-    """Génère un PDF sujet propre avec en-tête, consignes et questions."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.lib.colors import HexColor
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
-
-    TEAL = HexColor('#0f766e')
-    DARK = HexColor('#0f172a')
-    MID = HexColor('#334155')
-    LIGHT = HexColor('#64748b')
-    ACCENT = HexColor('#f0fdfa')
-    WHITE = HexColor('#ffffff')
-    GOLD = HexColor('#d97706')
-
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4,
-                            topMargin=2*cm, bottomMargin=2.5*cm,
-                            leftMargin=2.5*cm, rightMargin=2.5*cm)
-    styles = getSampleStyleSheet()
-
-    def sty(name='N', **kw):
-        return ParagraphStyle(name, parent=styles['Normal'], **kw)
-
-    story = []
-
-    # En-tête institution
-    story.append(Paragraph(
-        'CAMPUS LMS · Gestion de Projet',
-        sty('inst', fontSize=9, textColor=LIGHT, alignment=TA_CENTER, spaceAfter=4)
-    ))
-    story.append(HRFlowable(width="100%", thickness=2, color=TEAL, spaceAfter=6))
-
-    # Titre principal
-    title_data = [[Paragraph(
-        title,
-        sty('TI', fontSize=14, fontName='Helvetica-Bold', textColor=WHITE, alignment=TA_CENTER)
-    )]]
-    title_tbl = Table(title_data, colWidths=[16*cm])
-    title_tbl.setStyle(TableStyle([
-        ('BACKGROUND', (0,0),(-1,-1), TEAL),
-        ('TOPPADDING', (0,0),(-1,-1), 14),
-        ('BOTTOMPADDING', (0,0),(-1,-1), 14),
-        ('LEFTPADDING', (0,0),(-1,-1), 16),
-        ('RIGHTPADDING', (0,0),(-1,-1), 16),
-    ]))
-    story.append(title_tbl)
-    story.append(Spacer(1, 0.4*cm))
-
-    # Méta-infos
-    if meta_info:
-        info_parts = []
-        for k, v in meta_info.items():
-            info_parts.append(f'<b>{k}</b> : {v}')
-        story.append(Paragraph(' · '.join(info_parts),
-                                sty('MI', fontSize=10, textColor=MID, alignment=TA_CENTER)))
-        story.append(Spacer(1, 0.4*cm))
-
-    # Intro / consignes
-    if intro:
-        story.append(Paragraph('CONSIGNES', sty('CT', fontSize=10, textColor=TEAL, fontName='Helvetica-Bold')))
-        story.append(Spacer(1, 0.15*cm))
-        for line in intro.split('\n'):
-            if line.strip():
-                story.append(Paragraph(
-                    line.strip(),
-                    sty('CL', fontSize=10, textColor=MID, leftIndent=10, spaceAfter=3, leading=15)
-                ))
-        story.append(Spacer(1, 0.5*cm))
-        story.append(HRFlowable(width="100%", thickness=0.5, color=HexColor('#e2e8f0')))
-        story.append(Spacer(1, 0.5*cm))
-
-    # Questions
-    story.append(Paragraph('QUESTIONS', sty('QT', fontSize=10, textColor=TEAL, fontName='Helvetica-Bold')))
-    story.append(Spacer(1, 0.4*cm))
-
-    for idx, (q_title, q_text) in enumerate(questions_list, 1):
-        # Numéro de question
-        q_hdr = Table([[
-            Paragraph(q_title, sty('QH', fontSize=10, fontName='Helvetica-Bold', textColor=TEAL))
-        ]], colWidths=[16*cm])
-        q_hdr.setStyle(TableStyle([
-            ('BACKGROUND', (0,0),(-1,-1), ACCENT),
-            ('TOPPADDING', (0,0),(-1,-1), 5),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 5),
-            ('LEFTPADDING', (0,0),(-1,-1), 10),
-            ('LINEBELOW', (0,0),(-1,-1), 1, TEAL),
-        ]))
-        story.append(q_hdr)
-        story.append(Spacer(1, 0.2*cm))
-
-        # Texte de la question
-        story.append(Paragraph(
-            q_text,
-            sty('QB', fontSize=10.5, textColor=DARK, leading=15, spaceAfter=6)
-        ))
-
-        # Lignes de réponse
-        story.append(Spacer(1, 0.2*cm))
-        for _ in range(5):
-            story.append(HRFlowable(width="100%", thickness=0.3,
-                                    color=HexColor('#cbd5e1'), spaceAfter=0.55*cm))
-        story.append(Spacer(1, 0.5*cm))
-
-    # Pied de page
-    story.append(HRFlowable(width="100%", thickness=1, color=TEAL))
-    story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph(
-        'Sujet téléchargé depuis Campus LMS · En cas de problème, contactez votre professeur.',
-        sty('FT', fontSize=8, textColor=LIGHT, alignment=TA_CENTER)
-    ))
-
-    doc.build(story)
-    return buf.getvalue()
+    """Délègue à pdf_canvas_utils (canvas-based, fiable sur tout serveur)."""
+    return _gen_subject(title=title, questions_list=questions_list,
+                        meta_info=meta_info, intro=intro)
 
 
 class Command(BaseCommand):
