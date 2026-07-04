@@ -615,6 +615,19 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             if progress:
                 progress.evaluate_completion()
 
+        # Keep the linked secure-exam session in sync — without this, ExamSession.status
+        # never leaves STARTED, so "completed exams" lists never show it and the
+        # anti-cheat auto-submit never actually closes the session.
+        try:
+            exam_session = attempt.exam_session
+        except ExamSession.DoesNotExist:
+            exam_session = None
+        if exam_session and exam_session.status == 'STARTED':
+            from django.utils import timezone as tz
+            exam_session.status = 'SUBMITTED'
+            exam_session.submitted_at = exam_session.submitted_at or tz.now()
+            exam_session.save(update_fields=['status', 'submitted_at'])
+
         # Re-fetch from DB so serializer gets fresh graded answers (not stale prefetch)
         fresh = QuizAttempt.objects.prefetch_related(
             'answers__question', 'answers__selected_choices'
