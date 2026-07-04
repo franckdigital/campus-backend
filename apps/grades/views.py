@@ -206,6 +206,21 @@ class ElearningStudentScoresView(APIView):
         else:
             return Response({'detail': 'Type invalide (ASSIGNMENT|QUIZ|EXAM)'}, status=400)
 
+        # Ajoute les notes déjà importées (Grade avec evaluation=None)
+        subject_id_int = item_info.get('subject_id')
+        class_id_int   = item_info.get('class_id')
+        imported_map   = {
+            str(g.student_id): float(g.score)
+            for g in Grade.objects.filter(
+                subject_id=subject_id_int,
+                class_group_id=class_id_int,
+                evaluation__isnull=True,
+                student_id__in=[s['student_id'] for s in students_data],
+            )
+        }
+        for s in students_data:
+            s['imported_score'] = imported_map.get(s['student_id'])
+
         students_data.sort(key=lambda x: x['student_name'])
         return Response({'item': item_info, 'students': students_data})
 
