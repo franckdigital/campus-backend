@@ -55,6 +55,10 @@ class ReportCardSerializer(serializers.ModelSerializer):
     semester_name = serializers.CharField(source='semester.label', read_only=True)
     academic_year_name = serializers.CharField(source='semester.academic_year.name', read_only=True)
     academic_year = serializers.IntegerField(source='semester.academic_year.id', read_only=True)
+    # Retourne le vrai statut académique (PASS/FAIL/HONORS) pour compatibilité admin
+    academic_mention = serializers.CharField(source='status', read_only=True)
+    # Pour l'ancien frontend étudiant qui filtre c.status === 'PUBLISHED'
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = ReportCard
@@ -63,3 +67,11 @@ class ReportCardSerializer(serializers.ModelSerializer):
 
     def get_student_name(self, obj):
         return obj.student.user.full_name if obj.student and obj.student.user else ''
+
+    def get_status(self, obj):
+        request = self.context.get('request')
+        user = request.user if request else None
+        # Étudiant non-staff : retourne 'PUBLISHED' si publié (compat ancien frontend)
+        if user and not user.is_staff and hasattr(user, 'student_profile'):
+            return 'PUBLISHED' if obj.is_published else 'PENDING'
+        return obj.status
