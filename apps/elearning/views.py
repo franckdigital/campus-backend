@@ -364,7 +364,13 @@ class QuizViewSet(viewsets.ModelViewSet):
         if not student:
             return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
 
-        attempts_used = quiz.attempts.filter(student=student).count()
+        # Resume existing in-progress attempt (not yet submitted) instead of creating a new one
+        in_progress = quiz.attempts.filter(student=student, submitted_at__isnull=True).first()
+        if in_progress:
+            return Response(QuizAttemptSerializer(in_progress).data, status=status.HTTP_200_OK)
+
+        # Only count submitted attempts toward the limit
+        attempts_used = quiz.attempts.filter(student=student, submitted_at__isnull=False).count()
         if quiz.max_attempts and attempts_used >= quiz.max_attempts:
             return Response({'detail': 'Nombre maximum de tentatives atteint'}, status=status.HTTP_403_FORBIDDEN)
 
