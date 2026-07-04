@@ -921,7 +921,13 @@ class CourseLessonSerializer(serializers.ModelSerializer):
             'external_embed_url', 'video_file', 'document_file',
             'has_media', 'order', 'is_active', 'created_at',
         ]
-        read_only_fields = ['id', 'has_media', 'created_at']
+        # is_active is never meant to be set by the lesson form — deletion goes
+        # through a separate hard-delete endpoint. Writable here is actively
+        # dangerous: DRF treats an absent BooleanField on multipart/form-data
+        # input (any request with a file, e.g. the "Ajouter une leçon" upload)
+        # as an explicit False, silently overriding the model's default=True
+        # and hiding the lesson from every is_active=True student-facing query.
+        read_only_fields = ['id', 'has_media', 'created_at', 'is_active']
 
 
 class CourseChapterSerializer(serializers.ModelSerializer):
