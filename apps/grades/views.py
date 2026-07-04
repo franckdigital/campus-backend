@@ -579,6 +579,7 @@ class ReportCardViewSet(viewsets.ModelViewSet):
                     'total_students': total,
                     'status': _status_from_average(avg),
                     'subject_averages': subject_map,
+                    'is_published': True,
                 }
             )
             cards.append(card)

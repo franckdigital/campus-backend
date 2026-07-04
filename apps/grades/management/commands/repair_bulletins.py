@@ -59,7 +59,8 @@ class Command(BaseCommand):
                 card.subject_averages = subject_map
                 if global_avg is not None:
                     card.average = str(round(global_avg, 2))
-                card.save(update_fields=['subject_averages', 'average'])
+                card.is_published = True
+                card.save(update_fields=['subject_averages', 'average', 'is_published'])
                 fixed += 1
 
             except Exception as exc:
