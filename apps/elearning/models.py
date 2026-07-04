@@ -1552,3 +1552,27 @@ class CourseLesson(BaseModel):
 
     def __str__(self):
         return f"{self.chapter.title} — {self.title}"
+
+
+class CourseLessonProgress(BaseModel):
+    """Tracks a student's completion of a CourseLesson (the self-paced
+    Course/CourseChapter/CourseLesson builder) — separate from LessonProgress,
+    which tracks the older Lesson/Chapter (parcours) model.
+    """
+    student = models.ForeignKey(
+        Student, on_delete=models.CASCADE, related_name='course_lesson_progress'
+    )
+    lesson = models.ForeignKey(
+        CourseLesson, on_delete=models.CASCADE, related_name='progress_records'
+    )
+    is_completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'course_lesson_progress'
+        verbose_name = 'Progression de leçon de cours'
+        verbose_name_plural = 'Progressions de leçons de cours'
+        unique_together = ['student', 'lesson']
+
+    def __str__(self):
+        return f"{self.student.matricule} - {self.lesson.title}"

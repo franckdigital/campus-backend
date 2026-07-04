@@ -1867,3 +1867,35 @@ class CourseLessonViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return super().update(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'], url_path='my-completed')
+    def my_completed(self, request):
+        """Return CourseLesson IDs completed by the current student."""
+        from .models import CourseLessonProgress
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response([])
+        ids = CourseLessonProgress.objects.filter(
+            student=student, is_completed=True
+        ).values_list('lesson_id', flat=True)
+        return Response(list(ids))
+
+    @action(detail=True, methods=['post'], url_path='mark-complete')
+    def mark_complete(self, request, pk=None):
+        """Manual completion for a course lesson (self-paced course player)."""
+        from .models import CourseLessonProgress
+        lesson = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from django.utils import timezone
+        progress, _ = CourseLessonProgress.objects.get_or_create(
+            student=student, lesson=lesson,
+            defaults={'is_completed': True, 'completed_at': timezone.now()}
+        )
+        if not progress.is_completed:
+            progress.is_completed = True
+            progress.completed_at = timezone.now()
+            progress.save(update_fields=['is_completed', 'completed_at'])
+        return Response({'lesson': str(lesson.id), 'is_completed': True})
