@@ -528,7 +528,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
     serializer_class = QuestionSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['order']
-    filterset_fields = ['quiz', 'question_type', 'is_active']
+    filterset_fields = ['quiz', 'quiz__subject', 'question_type', 'is_active']
 
 
 class ChoiceViewSet(viewsets.ModelViewSet):
