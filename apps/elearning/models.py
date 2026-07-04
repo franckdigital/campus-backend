@@ -895,6 +895,11 @@ class ExamSession(BaseModel):
         if max_sw and self.tab_switch_count > max_sw:
             self.is_flagged = True
             self.flag_reason = f"Trop de changements d'onglet ({self.tab_switch_count}/{max_sw})"
+            # Actually close the session — being flagged shouldn't leave it stuck
+            # in STARTED, which would let the student keep answering or retake it.
+            if self.status == 'STARTED':
+                self.status = 'FLAGGED'
+                self.submitted_at = self.submitted_at or timezone.now()
         self.save()
 
 

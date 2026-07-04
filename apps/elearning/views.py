@@ -843,7 +843,7 @@ class SecureExamViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Cet examen n\'est pas disponible'}, status=status.HTTP_403_FORBIDDEN)
 
         existing = ExamSession.objects.filter(exam=exam, student=student).first()
-        if existing and existing.status in ('SUBMITTED',):
+        if existing and existing.status in ('SUBMITTED', 'FLAGGED'):
             return Response({'detail': 'Vous avez déjà soumis cet examen'}, status=status.HTTP_400_BAD_REQUEST)
 
         session, created = ExamSession.objects.get_or_create(
