@@ -195,18 +195,9 @@ class PaymentViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        payment = serializer.save(received_by=self.request.user)
-        if payment.status == 'SUCCESS':
-            payment.invoice.add_payment(payment.amount)
-            self._maybe_create_cash_transaction(payment)
-
-    def _maybe_create_cash_transaction(self, payment):
-        """
-        Tous les paiements SUCCESS alimentent la caisse automatiquement.
-        Délègue à on_payment_save (signal) qui gère la session auto-création.
-        On ne fait rien ici pour éviter les doublons — le signal s'en charge.
-        """
-        pass  # handled by apps.finance.signals.on_payment_save
+        # invoice.amount_paid and the cash transaction are both kept in sync
+        # by the on_payment_save signal — don't duplicate that here.
+        serializer.save(received_by=self.request.user)
 
     def perform_update(self, serializer):
         from decimal import Decimal
@@ -405,7 +396,7 @@ class CashPaymentView(APIView):
             validated_at=timezone.now()
         )
         
-        CashTransaction.objects.create(
+        transaction = CashTransaction.objects.create(
             session=cash_session,
             payment=payment,
             transaction_type='IN',
@@ -414,8 +405,9 @@ class CashPaymentView(APIView):
             reference=payment.payment_number,
             recorded_by=request.user
         )
-        
-        invoice.add_payment(data['amount'])
+
+        # invoice.amount_paid is kept in sync by the on_payment_save signal
+        # (recomputed as the sum of all SUCCESS payments) — don't add here too.
 
         # H2: Versement caisse → finance + compta (multi-channel)
         try:

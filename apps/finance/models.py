@@ -255,7 +255,8 @@ class Payment(BaseModel):
             self.validated_at = timezone.now()
             self.validated_by = user
             self.save()
-            self.invoice.add_payment(self.amount)
+            # invoice.amount_paid is kept in sync by the on_payment_save signal
+            # (recomputed as the sum of all SUCCESS payments) — don't add here too.
             # Auto-flag registration_fee_paid when a registration invoice is fully paid
             try:
                 self.invoice.refresh_from_db()
