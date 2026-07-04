@@ -515,6 +515,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
                     'score': session.score,
                     'feedback': session.feedback,
                     'submission_file': request.build_absolute_uri(session.submission_file.url) if session.submission_file else None,
+                    'corrected_file': request.build_absolute_uri(session.corrected_file.url) if session.corrected_file else None,
                 }
         except Exception:
             pass
