@@ -844,6 +844,8 @@ class VirtualClassroomSerializer(serializers.ModelSerializer):
         return obj.polls.filter(is_active=True).count()
 
     def get_jitsi_url(self, obj):
+        if obj.provider != 'JITSI':
+            return None
         return obj.get_jitsi_url()
 
 
