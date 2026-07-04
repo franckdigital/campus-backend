@@ -771,11 +771,11 @@ class SecureExam(BaseModel):
         ('CONCOURS', 'Concours'),
     ]
 
-    title = models.CharField(max_length=255)
+    title = models.CharField(max_length=255, blank=True, default='')
     description = models.TextField(blank=True)
 
-    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='secure_exams')
-    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='secure_exams')
+    class_obj = models.ForeignKey(Class, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exams')
+    subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exams')
     quiz = models.OneToOneField(
         Quiz, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exam'
     )

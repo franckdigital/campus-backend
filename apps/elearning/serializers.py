@@ -454,8 +454,8 @@ class ReadingProgressSerializer(serializers.ModelSerializer):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SecureExamSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source='class_obj.name', read_only=True)
-    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    class_name = serializers.CharField(source='class_obj.name', read_only=True, default=None)
+    subject_name = serializers.CharField(source='subject.name', read_only=True, default=None)
     is_available = serializers.SerializerMethodField()
     exam_type_label = serializers.CharField(source='get_exam_type_display', read_only=True)
     exam_pdf = serializers.SerializerMethodField()
@@ -483,6 +483,11 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'is_available', 'my_session', 'is_active', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+        extra_kwargs = {
+            'class_obj': {'required': False, 'allow_null': True},
+            'subject':   {'required': False, 'allow_null': True},
+            'title':     {'required': False, 'allow_blank': True, 'default': ''},
+        }
 
     def get_is_available(self, obj):
         return obj.is_available()
