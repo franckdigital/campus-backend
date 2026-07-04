@@ -15,6 +15,287 @@ from .serializers import (
 )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# E-Learning ↔ Grades sync
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ElearningEvaluationsView(APIView):
+    """GET /elearning-evaluations/?class_group=X — liste devoirs/quiz/examens E-Learning."""
+
+    def get(self, request):
+        from apps.elearning.models import Assignment, Quiz, SecureExam
+        class_id = request.query_params.get('class_group')
+        if not class_id:
+            return Response([])
+
+        items = []
+        for a in Assignment.objects.filter(
+            class_obj=class_id, status='PUBLISHED'
+        ).select_related('subject', 'class_obj').order_by('title'):
+            items.append({
+                'type': 'ASSIGNMENT', 'id': str(a.id),
+                'title': a.title,
+                'subject_id': str(a.subject_id),
+                'subject_name': a.subject.name,
+                'class_name': a.class_obj.name,
+                'max_score': float(a.max_score),
+                'due_date': str(a.due_date.date()) if a.due_date else None,
+            })
+
+        for q in Quiz.objects.filter(
+            class_obj=class_id, is_published=True
+        ).select_related('subject', 'class_obj').order_by('title'):
+            max_s = float(q.max_score) if q.max_score else 20
+            items.append({
+                'type': 'QUIZ', 'id': str(q.id),
+                'title': q.title,
+                'subject_id': str(q.subject_id),
+                'subject_name': q.subject.name,
+                'class_name': q.class_obj.name,
+                'max_score': max_s,
+            })
+
+        for e in SecureExam.objects.filter(
+            class_obj=class_id, is_published=True
+        ).select_related('subject', 'class_obj').order_by('title'):
+            items.append({
+                'type': 'EXAM', 'id': str(e.id),
+                'title': e.title,
+                'subject_id': str(e.subject_id),
+                'subject_name': e.subject.name,
+                'class_name': e.class_obj.name,
+                'max_score': float(e.max_score),
+            })
+
+        return Response(items)
+
+
+class ElearningStudentScoresView(APIView):
+    """GET /elearning-student-scores/{type}/{id}/ — scores étudiants pour un item E-Learning."""
+
+    def get(self, request, item_type, item_id):
+        from apps.elearning.models import (
+            Assignment, AssignmentSubmission, AssignmentCorrection,
+            Quiz, QuizAttempt,
+            SecureExam, ExamSession,
+        )
+        from apps.academic.models import Enrollment
+
+        students_data = []
+        item_info = {}
+
+        if item_type == 'ASSIGNMENT':
+            try:
+                obj = Assignment.objects.select_related('subject', 'class_obj').get(id=item_id)
+            except Assignment.DoesNotExist:
+                return Response({'detail': 'Devoir introuvable'}, status=404)
+
+            enrollments = Enrollment.objects.filter(
+                class_obj=obj.class_obj, status='ENROLLED', is_active=True
+            ).select_related('student__user')
+
+            subs = {str(s.student_id): s for s in AssignmentSubmission.objects.filter(assignment=obj)}
+            corrections = {}
+            for s in subs.values():
+                if hasattr(s, 'correction'):
+                    try:
+                        corrections[str(s.student_id)] = s.correction
+                    except Exception:
+                        pass
+
+            for enr in enrollments:
+                student = enr.student
+                sid = str(student.id)
+                cor = corrections.get(sid)
+                sub = subs.get(sid)
+                students_data.append({
+                    'student_id': sid,
+                    'student_name': student.user.full_name if student.user else '',
+                    'student_matricule': student.matricule,
+                    'score': float(cor.score) if cor else None,
+                    'max_score': float(obj.max_score),
+                    'submitted': sub is not None,
+                    'graded': cor is not None,
+                    'comment': cor.feedback if cor else '',
+                })
+
+            item_info = {
+                'type': 'ASSIGNMENT', 'id': str(obj.id), 'title': obj.title,
+                'subject_id': str(obj.subject_id), 'subject_name': obj.subject.name,
+                'class_id': str(obj.class_obj_id), 'class_name': obj.class_obj.name,
+                'max_score': float(obj.max_score),
+            }
+
+        elif item_type == 'QUIZ':
+            try:
+                obj = Quiz.objects.select_related('subject', 'class_obj').get(id=item_id)
+            except Quiz.DoesNotExist:
+                return Response({'detail': 'Quiz introuvable'}, status=404)
+
+            enrollments = Enrollment.objects.filter(
+                class_obj=obj.class_obj, status='ENROLLED', is_active=True
+            ).select_related('student__user')
+
+            best_attempts = {}
+            for att in QuizAttempt.objects.filter(quiz=obj).select_related('student'):
+                sid = str(att.student_id)
+                if sid not in best_attempts or float(att.percent) > float(best_attempts[sid].percent):
+                    best_attempts[sid] = att
+
+            max_s = float(obj.max_score) if obj.max_score else 20
+
+            for enr in enrollments:
+                student = enr.student
+                sid = str(student.id)
+                att = best_attempts.get(sid)
+                score_on_max = round(float(att.percent) / 100 * 20, 2) if att else None
+                students_data.append({
+                    'student_id': sid,
+                    'student_name': student.user.full_name if student.user else '',
+                    'student_matricule': student.matricule,
+                    'score': score_on_max,
+                    'max_score': 20,
+                    'submitted': att is not None,
+                    'graded': att is not None and att.is_graded,
+                    'percent': float(att.percent) if att else None,
+                    'comment': f"{float(att.percent):.0f}% — {'Réussi' if att.is_passed else 'Échoué'}" if att else '',
+                })
+
+            item_info = {
+                'type': 'QUIZ', 'id': str(obj.id), 'title': obj.title,
+                'subject_id': str(obj.subject_id), 'subject_name': obj.subject.name,
+                'class_id': str(obj.class_obj_id), 'class_name': obj.class_obj.name,
+                'max_score': 20,
+            }
+
+        elif item_type == 'EXAM':
+            try:
+                obj = SecureExam.objects.select_related('subject', 'class_obj').get(id=item_id)
+            except SecureExam.DoesNotExist:
+                return Response({'detail': 'Examen introuvable'}, status=404)
+
+            enrollments = Enrollment.objects.filter(
+                class_obj=obj.class_obj, status='ENROLLED', is_active=True
+            ).select_related('student__user')
+
+            sessions = {str(s.student_id): s for s in ExamSession.objects.filter(exam=obj).select_related('student')}
+
+            for enr in enrollments:
+                student = enr.student
+                sid = str(student.id)
+                ses = sessions.get(sid)
+                score = float(ses.score) if ses and ses.score is not None else None
+                students_data.append({
+                    'student_id': sid,
+                    'student_name': student.user.full_name if student.user else '',
+                    'student_matricule': student.matricule,
+                    'score': score,
+                    'max_score': float(obj.max_score),
+                    'submitted': ses is not None and ses.status == 'SUBMITTED',
+                    'graded': ses is not None and ses.score is not None,
+                    'comment': ses.feedback if ses else '',
+                })
+
+            item_info = {
+                'type': 'EXAM', 'id': str(obj.id), 'title': obj.title,
+                'subject_id': str(obj.subject_id), 'subject_name': obj.subject.name,
+                'class_id': str(obj.class_obj_id), 'class_name': obj.class_obj.name,
+                'max_score': float(obj.max_score),
+            }
+
+        else:
+            return Response({'detail': 'Type invalide (ASSIGNMENT|QUIZ|EXAM)'}, status=400)
+
+        students_data.sort(key=lambda x: x['student_name'])
+        return Response({'item': item_info, 'students': students_data})
+
+
+class ElearningImportGradesView(APIView):
+    """POST /elearning-import-grades/ — importe les scores E-Learning dans le modèle Grade."""
+
+    def post(self, request):
+        from apps.students.models import Student
+        from apps.academic.models import Semester
+
+        item_type   = request.data.get('type')
+        item_id     = request.data.get('item_id')
+        semester_id = request.data.get('semester_id')
+        grades_data = request.data.get('grades', [])
+
+        if not item_type or not item_id or not grades_data:
+            return Response({'detail': 'type, item_id et grades requis'}, status=400)
+
+        semester = None
+        if semester_id:
+            try:
+                semester = Semester.objects.get(id=semester_id)
+            except Semester.DoesNotExist:
+                pass
+
+        # Resolve subject + class from source item
+        from apps.elearning.models import Assignment, Quiz, SecureExam
+        subject_id = class_id = None
+        max_score  = Decimal('20')
+
+        if item_type == 'ASSIGNMENT':
+            obj = Assignment.objects.select_related('subject', 'class_obj').get(id=item_id)
+            subject_id, class_id, max_score = obj.subject_id, obj.class_obj_id, obj.max_score
+        elif item_type == 'QUIZ':
+            obj = Quiz.objects.select_related('subject', 'class_obj').get(id=item_id)
+            subject_id, class_id, max_score = obj.subject_id, obj.class_obj_id, Decimal('20')
+        elif item_type == 'EXAM':
+            obj = SecureExam.objects.select_related('subject', 'class_obj').get(id=item_id)
+            subject_id, class_id, max_score = obj.subject_id, obj.class_obj_id, obj.max_score
+        else:
+            return Response({'detail': 'Type invalide'}, status=400)
+
+        from django.utils import timezone as tz
+        created = updated = 0
+
+        for item in grades_data:
+            student_id = item.get('student_id')
+            score      = item.get('score')
+            if student_id is None or score is None:
+                continue
+            try:
+                student = Student.objects.get(id=student_id)
+            except Student.DoesNotExist:
+                continue
+
+            try:
+                qs = Grade.objects.filter(
+                    student=student,
+                    subject_id=subject_id,
+                    class_group_id=class_id,
+                    semester=semester,
+                    evaluation__isnull=True,
+                )
+                defaults = dict(
+                    score=Decimal(str(score)),
+                    max_score=max_score,
+                    date=tz.now().date(),
+                    comment=item.get('comment', ''),
+                    entered_by=request.user,
+                )
+                if qs.exists():
+                    qs.update(**defaults)
+                    updated += 1
+                else:
+                    Grade.objects.create(
+                        student=student,
+                        subject_id=subject_id,
+                        class_group_id=class_id,
+                        semester=semester,
+                        evaluation=None,
+                        **defaults,
+                    )
+                    created += 1
+            except Exception:
+                continue
+
+        return Response({'created': created, 'updated': updated})
+
+
 def _compute_student_averages(student, class_group, semester):
     """
     Returns (global_average, subject_averages_dict).
