@@ -41,7 +41,13 @@ class CinetPayTransactionSerializer(serializers.ModelSerializer):
 
 
 class CinetPayInitiateSerializer(serializers.Serializer):
-    invoice_id = serializers.UUIDField()
+    # Either invoice_id (pay down an existing invoice) or student_id (create
+    # one on the fly) must be provided — validated in the view, since which
+    # one is required depends on the other.
+    invoice_id = serializers.UUIDField(required=False)
+    student_id = serializers.UUIDField(required=False)
+    fee_type_code = serializers.CharField(required=False, allow_blank=True)
+    description = serializers.CharField(required=False, allow_blank=True)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 

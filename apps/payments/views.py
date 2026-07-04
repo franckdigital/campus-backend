@@ -45,30 +45,46 @@ class CinetPayInitiateView(APIView):
     def post(self, request):
         serializer = CinetPayInitiateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
         data = serializer.validated_data
-        
-        try:
-            invoice = Invoice.objects.get(id=data['invoice_id'])
-        except Invoice.DoesNotExist:
+        invoice_id = data.get('invoice_id')
+        student_id = data.get('student_id')
+
+        if not invoice_id and not student_id:
             return Response(
-                {'detail': 'Facture non trouvée'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        if invoice.status in ['PAID', 'CANCELLED']:
-            return Response(
-                {'detail': 'Cette facture ne peut pas être payée'},
+                {'detail': 'invoice_id ou student_id requis'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        amount = data.get('amount', invoice.balance)
-        if amount <= 0:
-            return Response(
-                {'detail': 'Le montant doit être supérieur à 0'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+
+        if invoice_id:
+            try:
+                invoice = Invoice.objects.get(id=invoice_id)
+            except Invoice.DoesNotExist:
+                return Response(
+                    {'detail': 'Facture non trouvée'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if invoice.status in ['PAID', 'CANCELLED']:
+                return Response(
+                    {'detail': 'Cette facture ne peut pas être payée'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            amount = data.get('amount', invoice.balance)
+            if amount <= 0:
+                return Response(
+                    {'detail': 'Le montant doit être supérieur à 0'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            # No invoice yet — create one on the fly so a Mobile Money payment
+            # always lands somewhere instead of being silently unattached.
+            invoice, error = self._create_invoice_for_payment(request, student_id, data)
+            if error:
+                return error
+            amount = invoice.balance
+
         transaction = CinetPayTransaction.objects.create(
             invoice=invoice,
             amount=amount,
@@ -91,6 +107,77 @@ class CinetPayInitiateView(APIView):
                 {'detail': result['error'], 'transaction_id': transaction.transaction_id},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+    def _create_invoice_for_payment(self, request, student_id, data):
+        """Create an Invoice + InvoiceItem for a Mobile Money payment that
+        wasn't initiated against an existing invoice. Returns (invoice, None)
+        on success, or (None, Response) on failure."""
+        from datetime import timedelta
+        from apps.students.models import Student
+        from apps.finance.models import FeeType, InvoiceItem
+        from apps.core.models import AcademicYear
+        from django.utils import timezone as tz
+
+        amount = data.get('amount')
+        if not amount or amount <= 0:
+            return None, Response(
+                {'detail': 'Le montant est requis et doit être supérieur à 0'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            student = Student.objects.get(id=student_id)
+        except Student.DoesNotExist:
+            return None, Response({'detail': 'Étudiant non trouvé'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not student.site_id:
+            return None, Response({'detail': "Site de l'étudiant introuvable"}, status=status.HTTP_400_BAD_REQUEST)
+
+        academic_year = AcademicYear.get_current()
+        if not academic_year:
+            return None, Response(
+                {'detail': 'Aucune année académique en cours'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        fee_type_code = (data.get('fee_type_code') or 'TUITION').upper()
+        fee_type, _ = FeeType.objects.get_or_create(
+            code=fee_type_code,
+            defaults={
+                'name': 'Frais de scolarité' if fee_type_code == 'TUITION' else fee_type_code.title(),
+                'default_amount': amount,
+            }
+        )
+
+        description = data.get('description') or 'Paiement Mobile Money'
+        invoice = Invoice.objects.create(
+            student=student,
+            site=student.site,
+            academic_year=academic_year,
+            due_date=tz.now().date() + timedelta(days=30),
+            notes=description,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            fee_type=fee_type,
+            description=description,
+            quantity=1,
+            unit_price=amount,
+        )
+        invoice.refresh_from_db()  # pick up the item just created
+        invoice.save()  # recompute subtotal/total/balance now that the item exists
+
+        # calculate_totals() ran once already at Invoice.objects.create() time,
+        # when there were no items yet — a 0/0 balance made it set status
+        # 'PAID'. That doesn't get corrected by the recompute above unless one
+        # of its other branches fires, which they won't for a fresh unpaid
+        # invoice (amount_paid=0, not overdue) — so fix it explicitly.
+        if invoice.status == 'PAID' and invoice.balance > 0:
+            invoice.status = 'PENDING'
+            invoice.save(update_fields=['status'])
+
+        return invoice, None
 
 
 class CinetPayCallbackView(APIView):
