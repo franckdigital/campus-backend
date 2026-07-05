@@ -119,12 +119,12 @@ class StudentSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'id', 'user', 'user_data', 'matricule', 'gender', 'birth_date', 'birth_place',
-            'nationality', 'address', 'city', 'site', 'site_name', 'status', 'modality',
+            'nationality', 'address', 'city', 'site', 'site_name', 'status', 'modality', 'affectation_status',
             'admission_date', 'graduation_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'current_card', 'current_class',
             'registration_fee', 'registration_fee_paid', 'tuition_fee',
-            'total_paid', 'remaining_balance',
+            'total_paid', 'remaining_balance', 'echeance_override',
             'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'matricule', 'created_at', 'updated_at']
@@ -183,7 +183,7 @@ class StudentCreateSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'user_data', 'gender', 'birth_date', 'birth_place',
-            'nationality', 'address', 'city', 'site', 'status', 'modality',
+            'nationality', 'address', 'city', 'site', 'status', 'modality', 'affectation_status',
             'admission_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'registration_fee',
@@ -238,8 +238,8 @@ class StudentListSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'id', 'matricule', 'full_name', 'email', 'phone',
-            'gender', 'site', 'site_name', 'status', 'modality', 'is_active',
-            'registration_fee_paid', 'program_name',
+            'gender', 'site', 'site_name', 'status', 'modality', 'affectation_status', 'is_active',
+            'registration_fee_paid', 'echeance_override', 'program_name',
         ]
 
     def get_program_name(self, obj):
@@ -263,20 +263,35 @@ class StudentDossierSerializer(serializers.ModelSerializer):
     files = StudentFileSerializer(many=True, read_only=True)
     cards = StudentCardSerializer(many=True, read_only=True)
     current_class = serializers.SerializerMethodField()
+    tuition_up_to_date = serializers.SerializerMethodField()
+    has_payment_schedule = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
         fields = [
             'id', 'user', 'matricule', 'gender', 'birth_date', 'birth_place',
-            'nationality', 'address', 'city', 'site', 'site_name', 'status', 'modality',
+            'nationality', 'address', 'city', 'site', 'site_name', 'status', 'modality', 'affectation_status',
             'admission_date', 'graduation_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'files', 'cards',
             'current_class',
             'registration_fee', 'registration_fee_paid', 'tuition_fee',
-            'total_paid', 'remaining_balance',
+            'total_paid', 'remaining_balance', 'echeance_override',
+            'tuition_up_to_date', 'has_payment_schedule',
             'is_active', 'created_at', 'updated_at'
         ]
+
+    def _schedule_status(self, obj):
+        if not hasattr(obj, '_tuition_schedule_status_cache'):
+            from apps.finance.models import compute_tuition_schedule_status
+            obj._tuition_schedule_status_cache = compute_tuition_schedule_status(obj)
+        return obj._tuition_schedule_status_cache
+
+    def get_tuition_up_to_date(self, obj):
+        return self._schedule_status(obj)['is_up_to_date']
+
+    def get_has_payment_schedule(self, obj):
+        return self._schedule_status(obj)['has_schedule']
 
     def get_parents(self, obj):
         student_parents = obj.student_parents.select_related('parent__user')

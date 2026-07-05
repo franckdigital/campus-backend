@@ -532,7 +532,7 @@ def create_enrollment_on_registration_invoice(sender, instance, created, **kwarg
 
 
 class FeeConfiguration(BaseModel):
-    """Barème des frais de scolarité et d'inscription par site / filière / niveau / année / modalité."""
+    """Barème des frais de scolarité et d'inscription par site / filière / niveau / année / modalité / affectation."""
     # Mirrors Student.MODALITY_CHOICES (apps.students.models) — duplicated
     # here rather than imported to avoid a cross-app import at module load
     # time; keep the two lists in sync if modalities ever change.
@@ -540,6 +540,14 @@ class FeeConfiguration(BaseModel):
         ('PRESENTIEL', 'Présentiel'),
         ('ELEARNING', 'E-learning'),
         ('HYBRIDE', 'Hybride'),
+    ]
+    # Mirrors Student.AFFECTATION_CHOICES — an "Affecté" student was assigned
+    # to this school by the State's national post-bac orientation process
+    # (often subsidized/reduced fees); "Non affecté" is a private-track
+    # admission (full fees). Duplicated here for the same reason as above.
+    AFFECTATION_CHOICES = [
+        ('AFFECTE', 'Affecté (État)'),
+        ('NON_AFFECTE', 'Non affecté (Privé)'),
     ]
     site = models.ForeignKey(
         Site, on_delete=models.CASCADE, related_name='fee_configurations',
@@ -562,6 +570,11 @@ class FeeConfiguration(BaseModel):
         verbose_name="Modalité",
         help_text="Laisser vide pour appliquer ce barème à toutes les modalités"
     )
+    affectation_status = models.CharField(
+        max_length=20, choices=AFFECTATION_CHOICES, null=True, blank=True,
+        verbose_name="Affectation",
+        help_text="Laisser vide pour appliquer ce barème aux étudiants affectés et non affectés"
+    )
     registration_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais d'inscription")
     tuition_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais de scolarité")
     label = models.CharField(max_length=200, blank=True, verbose_name="Libellé")
@@ -577,44 +590,55 @@ class FeeConfiguration(BaseModel):
         parts = [self.site.name if self.site else 'Tous sites',
                  self.program.name if self.program else 'Toutes filières',
                  self.level.name if self.level else 'Tous niveaux',
-                 self.get_modality_display() if self.modality else 'Toutes modalités']
+                 self.get_modality_display() if self.modality else 'Toutes modalités',
+                 self.get_affectation_status_display() if self.affectation_status else 'Toutes affectations']
         return ' / '.join(parts)
 
     @classmethod
-    def get_for_enrollment(cls, site, level, academic_year=None, modality=None):
-        """Return the best-matching fee config for a given site + level + modality.
+    def get_for_enrollment(cls, site, level, academic_year=None, modality=None, affectation_status=None):
+        """Return the best-matching fee config for a given site + level +
+        modality + affectation status.
 
-        Modality is matched strictly in the four most-specific tiers (a
-        student's fee genuinely differs between présentiel/e-learning/hybride),
-        then relaxed to "any modality" (modality=None, the wildcard row) in the
-        last two, broadest fallback tiers — mirroring how site/level/program
-        already relax from most to least specific.
+        Modality and affectation are both matched strictly in the four most-
+        specific tiers (an affected/state-assigned student's fee genuinely
+        differs from a private-track one, same as présentiel/e-learning), then
+        relaxed one at a time — affectation first, then modality — in the
+        broader fallback tiers, mirroring how site/level/program already
+        relax from most to least specific.
         """
         qs = cls.objects.filter(is_active=True)
-        # Most specific: site + modality + level + year
+        # Most specific: site + modality + affectation + level + year
         if academic_year:
-            cfg = qs.filter(site=site, modality=modality, level=level, academic_year=academic_year).first()
+            cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
+                             level=level, academic_year=academic_year).first()
             if cfg:
                 return cfg
-        # site + modality + level (any year)
-        cfg = qs.filter(site=site, modality=modality, level=level, academic_year=None).first()
+        # site + modality + affectation + level (any year)
+        cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
+                         level=level, academic_year=None).first()
         if cfg:
             return cfg
-        # site + modality + program
+        # site + modality + affectation + program
         if level and level.program_id:
-            cfg = qs.filter(site=site, modality=modality, program_id=level.program_id, level=None).first()
+            cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
+                             program_id=level.program_id, level=None).first()
             if cfg:
                 return cfg
-        # site + modality only
-        cfg = qs.filter(site=site, modality=modality, level=None, program=None).first()
+        # site + modality + affectation only
+        cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
+                         level=None, program=None).first()
         if cfg:
             return cfg
-        # site only (any modality)
-        cfg = qs.filter(site=site, modality=None, level=None, program=None).first()
+        # site + modality only (any affectation)
+        cfg = qs.filter(site=site, modality=modality, affectation_status=None, level=None, program=None).first()
         if cfg:
             return cfg
-        # global fallback (any modality)
-        return qs.filter(site=None, modality=None, level=None, program=None).first()
+        # site only (any modality, any affectation)
+        cfg = qs.filter(site=site, modality=None, affectation_status=None, level=None, program=None).first()
+        if cfg:
+            return cfg
+        # global fallback (any modality, any affectation)
+        return qs.filter(site=None, modality=None, affectation_status=None, level=None, program=None).first()
 
 
 def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tuition_fee):
@@ -641,6 +665,8 @@ def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tu
         students = students.filter(site_id=fee_config.site_id)
     if fee_config.modality:
         students = students.filter(modality=fee_config.modality)
+    if fee_config.affectation_status:
+        students = students.filter(affectation_status=fee_config.affectation_status)
     if fee_config.level_id:
         students = students.filter(
             enrollments__status='ENROLLED', enrollments__is_active=True,
@@ -687,3 +713,92 @@ def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tu
         post_save.connect(create_enrollment_on_registration_invoice, sender=Invoice)
 
     return updated
+
+
+class FeeInstallment(BaseModel):
+    """One dated tranche of a FeeConfiguration's total (registration + tuition),
+    e.g. "Inscription & réinscription" / "Octobre" / "Novembre" each with their
+    own due_date and amount. A FeeConfiguration with no installments has the
+    échéancier feature simply inactive for that site/filière/niveau (fully
+    backward compatible — nothing changes for configs that don't opt in)."""
+    fee_configuration = models.ForeignKey(
+        FeeConfiguration, on_delete=models.CASCADE, related_name='installments',
+        verbose_name="Barème"
+    )
+    label = models.CharField(max_length=100, verbose_name="Libellé")
+    due_date = models.DateField(verbose_name="Date d'échéance",
+        help_text="La tranche doit être soldée au plus tard 5 jours après cette date")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Montant")
+    order = models.PositiveIntegerField(default=0, verbose_name="Ordre")
+
+    class Meta:
+        db_table = 'fee_installments'
+        verbose_name = "Échéance"
+        verbose_name_plural = "Échéancier"
+        ordering = ['order', 'due_date']
+
+    def __str__(self):
+        return f"{self.fee_configuration} — {self.label} ({self.amount} FCFA)"
+
+
+def compute_tuition_schedule_status(student, academic_year=None):
+    """Single source of truth for a student's échéancier compliance — called
+    by the elearning permission gate, financial_summary, EnrollmentSerializer
+    (teacher/admin roster badge) and the student dossier serializer, so they
+    can never disagree with each other.
+
+    Returns a dict: has_schedule, is_up_to_date, echeance_override,
+    cumulative_due, cumulative_paid.
+    """
+    from datetime import timedelta
+    from django.db.models import Sum
+    from django.utils import timezone
+
+    result = {
+        'has_schedule': False,
+        'is_up_to_date': True,
+        'echeance_override': bool(student.echeance_override),
+        'cumulative_due': 0,
+        'cumulative_paid': 0,
+    }
+
+    # Resolve the student's current level (via active enrollment), same
+    # pattern used by financial_summary/prepare_invoices.
+    level = None
+    try:
+        from apps.academic.models import Class as AcademicClass
+        enrollment_row = student.enrollments.filter(
+            status='ENROLLED', is_active=True
+        ).order_by('-created_at').values_list('class_obj_id', flat=True).first()
+        if enrollment_row:
+            class_obj = AcademicClass.objects.select_related('level').get(pk=enrollment_row)
+            level = class_obj.level
+    except Exception:
+        pass
+
+    fee_config = FeeConfiguration.get_for_enrollment(
+        student.site, level, academic_year,
+        modality=student.modality, affectation_status=student.affectation_status
+    )
+    if not fee_config:
+        return result
+
+    installments = fee_config.installments.all()
+    if not installments.exists():
+        return result
+
+    result['has_schedule'] = True
+
+    today = timezone.now().date()
+    grace_cutoff = today - timedelta(days=5)
+    cumulative_due = installments.filter(due_date__lte=grace_cutoff).aggregate(
+        s=Sum('amount'))['s'] or 0
+
+    cumulative_paid = Invoice.objects.filter(
+        student=student, is_active=True
+    ).exclude(status='CANCELLED').aggregate(s=Sum('amount_paid'))['s'] or 0
+
+    result['cumulative_due'] = cumulative_due
+    result['cumulative_paid'] = cumulative_paid
+    result['is_up_to_date'] = bool(student.echeance_override) or cumulative_paid >= cumulative_due
+    return result

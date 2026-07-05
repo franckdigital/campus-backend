@@ -232,15 +232,31 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     student_matricule = serializers.CharField(source='student.matricule', read_only=True)
     class_name = serializers.CharField(source='class_obj.name', read_only=True)
     academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
+    is_up_to_date = serializers.SerializerMethodField()
+    has_payment_schedule = serializers.SerializerMethodField()
+    echeance_override = serializers.BooleanField(source='student.echeance_override', read_only=True)
 
     class Meta:
         model = Enrollment
         fields = [
             'id', 'student', 'student_name', 'student_matricule',
             'class_obj', 'class_name', 'academic_year', 'academic_year_name',
-            'enrollment_date', 'status', 'is_active', 'created_at'
+            'enrollment_date', 'status', 'is_active', 'created_at',
+            'is_up_to_date', 'has_payment_schedule', 'echeance_override',
         ]
         read_only_fields = ['id', 'enrollment_date', 'created_at']
+
+    def _schedule_status(self, obj):
+        if not hasattr(obj, '_tuition_schedule_status_cache'):
+            from apps.finance.models import compute_tuition_schedule_status
+            obj._tuition_schedule_status_cache = compute_tuition_schedule_status(obj.student)
+        return obj._tuition_schedule_status_cache
+
+    def get_is_up_to_date(self, obj):
+        return self._schedule_status(obj)['is_up_to_date']
+
+    def get_has_payment_schedule(self, obj):
+        return self._schedule_status(obj)['has_schedule']
 
 
 class RoomSerializer(serializers.ModelSerializer):

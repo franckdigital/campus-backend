@@ -350,6 +350,9 @@ class QuizViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title', 'description']
     filterset_fields = ['class_obj', 'subject', 'lesson', 'is_published', 'is_active']
+    # A student behind on their tuition échéancier can't start a quiz attempt
+    # (browsing the quiz itself is unaffected — see apps.elearning.permissions).
+    tuition_gate_actions = ('start_attempt',)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -586,6 +589,7 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['started_at']
     filterset_fields = ['quiz', 'student', 'is_passed', 'is_graded']
+    tuition_gate_actions = ('submit',)
 
     @action(detail=True, methods=['post'], url_path='grade-text')
     def grade_text(self, request, pk=None):
@@ -706,9 +710,12 @@ class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['submitted_at']
     filterset_fields = ['assignment', 'student', 'status', 'is_late', 'is_active']
+    tuition_gate_actions = ('create',)
 
 
 class SubmitAssignmentView(APIView):
+    tuition_gate_required = True
+
     def post(self, request, assignment_id):
         from apps.students.models import Student
         
@@ -872,6 +879,9 @@ class SecureExamViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'description']
     ordering_fields = ['start_date', 'created_at']
     filterset_fields = ['class_obj', 'subject', 'exam_type', 'is_published', 'is_active']
+    # A student behind on their tuition échéancier can't start an exam session
+    # (browsing/listing exams is unaffected — see apps.elearning.permissions).
+    tuition_gate_actions = ('start_session',)
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -1064,6 +1074,7 @@ class ExamSessionGradeView(APIView):
 
 class ExamSessionSubmitFileView(APIView):
     """POST /elearning/exam-sessions/<session_id>/submit-file/ — Étudiant uploade sa copie."""
+    tuition_gate_required = True
 
     def post(self, request, session_id):
         try:

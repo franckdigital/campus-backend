@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     FeeType, Invoice, InvoiceItem, PaymentMethod, Payment,
     CashRegister, CashSession, CashTransaction, BankAccount, Expense,
-    FeeConfiguration
+    FeeConfiguration, FeeInstallment
 )
 
 
@@ -218,12 +218,24 @@ class CashPaymentSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True)
 
 
+class FeeInstallmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeeInstallment
+        fields = [
+            'id', 'fee_configuration', 'label', 'due_date', 'amount',
+            'order', 'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
 class FeeConfigurationSerializer(serializers.ModelSerializer):
     site_name = serializers.SerializerMethodField()
     program_name = serializers.SerializerMethodField()
     level_name = serializers.SerializerMethodField()
     academic_year_name = serializers.SerializerMethodField()
     modality_name = serializers.SerializerMethodField()
+    affectation_status_name = serializers.SerializerMethodField()
+    installments = FeeInstallmentSerializer(many=True, read_only=True)
 
     def get_site_name(self, obj):
         return obj.site.name if obj.site_id and obj.site else None
@@ -240,13 +252,17 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
     def get_modality_name(self, obj):
         return obj.get_modality_display() if obj.modality else None
 
+    def get_affectation_status_name(self, obj):
+        return obj.get_affectation_status_display() if obj.affectation_status else None
+
     class Meta:
         model = FeeConfiguration
         fields = [
             'id', 'site', 'site_name', 'program', 'program_name',
             'level', 'level_name', 'academic_year', 'academic_year_name',
-            'modality', 'modality_name',
+            'modality', 'modality_name', 'affectation_status', 'affectation_status_name',
             'registration_fee', 'tuition_fee', 'label', 'is_active',
+            'installments',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

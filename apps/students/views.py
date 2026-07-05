@@ -391,7 +391,10 @@ class StudentViewSet(viewsets.ModelViewSet):
                     except Exception as e:
                         logger.warning('financial_summary: cannot load academic_year %s: %s', academic_year_id, e)
             # Always attempt lookup — get_for_enrollment falls back to site-only when level=None
-            fee_config = FeeConfiguration.get_for_enrollment(student.site, level, academic_year, modality=student.modality)
+            fee_config = FeeConfiguration.get_for_enrollment(
+                student.site, level, academic_year,
+                modality=student.modality, affectation_status=student.affectation_status
+            )
             if fee_config:
                 configured_tuition = float(fee_config.tuition_fee)
                 configured_registration = float(fee_config.registration_fee)
@@ -413,6 +416,9 @@ class StudentViewSet(viewsets.ModelViewSet):
         # Remaining: use actual invoice balances when invoices exist (always accurate)
         remaining = total_balance if has_invoices else max(0.0, effective_tuition - total_paid)
 
+        from apps.finance.models import compute_tuition_schedule_status
+        schedule_status = compute_tuition_schedule_status(student)
+
         return Response({
             'tuition_fee':              effective_tuition,           # grand total all fees
             'tuition_fee_only':         effective_tuition_only,      # scolarité uniquement
@@ -424,6 +430,11 @@ class StudentViewSet(viewsets.ModelViewSet):
             'configured_tuition_fee':   configured_tuition,
             'configured_registration_fee': configured_registration,
             'has_invoices':             has_invoices,
+            'has_payment_schedule':     schedule_status['has_schedule'],
+            'tuition_up_to_date':       schedule_status['is_up_to_date'],
+            'echeance_override':        schedule_status['echeance_override'],
+            'cumulative_due':           float(schedule_status['cumulative_due']),
+            'cumulative_paid':          float(schedule_status['cumulative_paid']),
         })
 
 
@@ -476,7 +487,10 @@ class StudentViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 logger.warning('prepare_invoices: cannot resolve level: %s', e)
 
-            fee_config = FeeConfiguration.get_for_enrollment(site, level, current_year, modality=student.modality)
+            fee_config = FeeConfiguration.get_for_enrollment(
+                site, level, current_year,
+                modality=student.modality, affectation_status=student.affectation_status
+            )
             tuition_amount = float(fee_config.tuition_fee if fee_config else (student.tuition_fee or 0))
             reg_amount = float(fee_config.registration_fee if fee_config else (student.registration_fee or 0))
 

@@ -11,7 +11,7 @@ from django.db.models import Sum, Prefetch
 from .models import (
     FeeType, Invoice, InvoiceItem, PaymentMethod, Payment,
     CashRegister, CashSession, CashTransaction, BankAccount, Expense,
-    FeeConfiguration, recalculate_invoices_for_fee_config
+    FeeConfiguration, FeeInstallment, recalculate_invoices_for_fee_config
 )
 from .serializers import (
     FeeTypeSerializer, InvoiceSerializer, InvoiceListSerializer,
@@ -20,7 +20,7 @@ from .serializers import (
     CashRegisterSerializer, CashSessionSerializer, CashSessionListSerializer,
     CashTransactionSerializer, CashPaymentSerializer,
     BankAccountSerializer, ExpenseSerializer,
-    FeeConfigurationSerializer
+    FeeConfigurationSerializer, FeeInstallmentSerializer
 )
 
 
@@ -749,10 +749,15 @@ class FeeConfigurationViewSet(viewsets.ModelViewSet):
         if is_active is not None and is_active != '':
             qs = qs.filter(is_active=is_active.lower() in ('true', '1', 'yes'))
 
-        # modality is a plain CharField (not a FK), no collation workaround needed
+        # modality/affectation_status are plain CharFields (not FKs), no
+        # collation workaround needed
         modality = p.get('modality')
         if modality:
             qs = qs.filter(modality=modality)
+
+        affectation_status = p.get('affectation_status')
+        if affectation_status:
+            qs = qs.filter(affectation_status=affectation_status)
 
         return qs
 
@@ -770,3 +775,22 @@ class FeeConfigurationViewSet(viewsets.ModelViewSet):
         response = super().update(request, *args, **kwargs)
         response.data['invoices_updated'] = self._invoices_recalculated
         return response
+
+
+class FeeInstallmentViewSet(viewsets.ModelViewSet):
+    """CRUD for a FeeConfiguration's échéancier (Inscription, Octobre, Novembre...).
+    Filter by ?fee_configuration=<id> to list a single barème's schedule."""
+    queryset = FeeInstallment.objects.select_related('fee_configuration')
+    serializer_class = FeeInstallmentSerializer
+    filter_backends = [OrderingFilter]
+    ordering_fields = ['order', 'due_date']
+
+    def get_queryset(self):
+        qs = FeeInstallment.objects.select_related('fee_configuration')
+        fee_configuration = self.request.query_params.get('fee_configuration')
+        if fee_configuration:
+            qs = qs.extra(
+                where=["fee_installments.fee_configuration_id COLLATE utf8mb4_bin = %s"],
+                params=[fee_configuration.replace('-', '')]
+            )
+        return qs

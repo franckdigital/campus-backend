@@ -61,6 +61,15 @@ class Student(BaseModel):
         ('HYBRIDE', 'Hybride'),
     ]
 
+    # "Affecté" = assigned to this school by the State's national post-bac
+    # orientation process (often subsidized/reduced fees). "Non affecté" =
+    # private-track admission (full fees). Mirrored on FeeConfiguration
+    # (apps.finance.models) as another barème-matching dimension.
+    AFFECTATION_CHOICES = [
+        ('AFFECTE', 'Affecté (État)'),
+        ('NON_AFFECTE', 'Non affecté (Privé)'),
+    ]
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -85,6 +94,10 @@ class Student(BaseModel):
         max_length=20, choices=MODALITY_CHOICES, default='PRESENTIEL',
         help_text="Mode de suivi : présentiel, e-learning ou hybride"
     )
+    affectation_status = models.CharField(
+        max_length=20, choices=AFFECTATION_CHOICES, default='NON_AFFECTE',
+        help_text="Affecté par l'État (orientation nationale) ou non affecté (admission privée)"
+    )
     admission_date = models.DateField()
     graduation_date = models.DateField(null=True, blank=True)
     
@@ -102,6 +115,10 @@ class Student(BaseModel):
     tuition_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     remaining_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    echeance_override = models.BooleanField(
+        default=False,
+        help_text="Autorisation spéciale accordée par l'administration malgré un retard sur l'échéancier de scolarité"
+    )
 
     class Meta:
         db_table = 'students'
