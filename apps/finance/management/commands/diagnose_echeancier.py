@@ -21,7 +21,10 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from apps.students.models import Student
         from apps.academic.models import Class as AcademicClass
-        from apps.finance.models import FeeConfiguration, compute_tuition_schedule_status, _resolve_fee_config_for_student
+        from apps.finance.models import (
+            FeeConfiguration, compute_tuition_schedule_status,
+            _resolve_fee_config_for_student, get_student_installment_schedule,
+        )
 
         if not options['email'] and not options['matricule']:
             raise CommandError('Pass --email or --matricule to identify the student.')
@@ -94,3 +97,20 @@ class Command(BaseCommand):
         status = compute_tuition_schedule_status(student)
         for k, v in status.items():
             self.stdout.write(f"    {k} = {v}")
+
+        # ── Step 5: exact payload the admin dossier's "Échéancier" table
+        # consumes (GET /students/{id}/echeancier/) — confirms whether the
+        # table SHOULD be visible, isolating a "table absent" report to
+        # either the frontend/network layer or a real backend gap. ────────
+        self.stdout.write(self.style.MIGRATE_HEADING('\n[5] get_student_installment_schedule (payload de /students/{id}/echeancier/)'))
+        schedule = get_student_installment_schedule(student)
+        self.stdout.write(f"    has_schedule = {schedule['has_schedule']}")
+        self.stdout.write(f"    total = {schedule['total']} | cumulative_paid = {schedule['cumulative_paid']}")
+        if schedule['installments']:
+            for row in schedule['installments']:
+                self.stdout.write(
+                    f"      - {row['label']!r} due={row['due_date']} amount={row['amount']} "
+                    f"cumulative_due={row['cumulative_due']} status={row['status']}"
+                )
+        else:
+            self.stdout.write(self.style.WARNING('      (aucune tranche — le tableau ne peut pas s\'afficher)'))
