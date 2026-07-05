@@ -49,9 +49,10 @@ class Command(BaseCommand):
             else:
                 self.stdout.write(f'  Annee: {academic_year.name}')
 
-            # ── 3. FeeTypes ───────────────────────────────────────────────────
+            # ── 3. FeeTypes (codes canoniques utilises par prepare-invoices/
+            # recalculate_invoices_for_fee_config) ─────────────────────────────
             fee_scol, _ = FeeType.objects.get_or_create(
-                code='SCOL',
+                code='SCOLARITE',
                 defaults={
                     'name': 'Frais de scolarite',
                     'default_amount': 750000,
@@ -59,7 +60,7 @@ class Command(BaseCommand):
                 }
             )
             fee_inscr, _ = FeeType.objects.get_or_create(
-                code='INSCR',
+                code='INSCRIPTION',
                 defaults={
                     'name': "Frais d'inscription",
                     'default_amount': 150000,

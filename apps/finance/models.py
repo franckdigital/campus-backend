@@ -575,8 +575,20 @@ class FeeConfiguration(BaseModel):
         verbose_name="Affectation",
         help_text="Laisser vide pour appliquer ce barème aux étudiants affectés et non affectés"
     )
-    registration_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais d'inscription")
-    tuition_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais de scolarité")
+    CATEGORY_CHOICES = [
+        ('INSCRIPTION', 'Inscription'),
+        ('SCOLARITE',   'Scolarité'),
+    ]
+    # Inscription and scolarité are two separate barème rows (same
+    # site/programme/niveau/année/modalité/affectation scope, different
+    # fee_category) rather than two amount fields on one row — this lets the
+    # échéancier (FeeInstallment) attach unambiguously to the SCOLARITE row
+    # only, and lets inscription (always paid in full, never in installments)
+    # and scolarité (payable via échéancier) be edited/resolved independently.
+    fee_category = models.CharField(
+        max_length=20, choices=CATEGORY_CHOICES, default='SCOLARITE', verbose_name="Catégorie"
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Montant")
     label = models.CharField(max_length=200, blank=True, verbose_name="Libellé")
     is_active = models.BooleanField(default=True)
 
@@ -584,10 +596,11 @@ class FeeConfiguration(BaseModel):
         db_table = 'fee_configurations'
         verbose_name = "Configuration des frais"
         verbose_name_plural = "Configurations des frais"
-        ordering = ['site', 'program', 'level']
+        ordering = ['site', 'program', 'level', 'fee_category']
 
     def __str__(self):
-        parts = [self.site.name if self.site else 'Tous sites',
+        parts = [self.get_fee_category_display(),
+                 self.site.name if self.site else 'Tous sites',
                  self.program.name if self.program else 'Toutes filières',
                  self.level.name if self.level else 'Tous niveaux',
                  self.get_modality_display() if self.modality else 'Toutes modalités',
@@ -595,9 +608,10 @@ class FeeConfiguration(BaseModel):
         return ' / '.join(parts)
 
     @classmethod
-    def get_for_enrollment(cls, site, level, academic_year=None, modality=None, affectation_status=None):
+    def get_for_enrollment(cls, site, level, fee_category, academic_year=None, modality=None, affectation_status=None):
         """Return the best-matching fee config for a given site + level +
-        modality + affectation status.
+        modality + affectation status + fee_category (INSCRIPTION/SCOLARITE
+        — always required, since the two are now separate barème rows).
 
         Modality and affectation are both matched strictly in the four most-
         specific tiers (an affected/state-assigned student's fee genuinely
@@ -606,7 +620,7 @@ class FeeConfiguration(BaseModel):
         broader fallback tiers, mirroring how site/level/program already
         relax from most to least specific.
         """
-        qs = cls.objects.filter(is_active=True)
+        qs = cls.objects.filter(is_active=True, fee_category=fee_category)
         # Most specific: site + modality + affectation + level + year
         if academic_year:
             cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
@@ -641,8 +655,8 @@ class FeeConfiguration(BaseModel):
         return qs.filter(site=None, modality=None, affectation_status=None, level=None, program=None).first()
 
 
-def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tuition_fee):
-    """When a barème (FeeConfiguration) is edited, push the new amounts onto
+def recalculate_invoices_for_fee_config(fee_config, old_amount):
+    """When a barème (FeeConfiguration) is edited, push the new amount onto
     already-issued but unpaid/partially-paid invoices for students matching
     that config's scope (site/modality/level-or-program). Already-PAID and
     CANCELLED invoices are never touched. A line item is only overwritten
@@ -651,14 +665,18 @@ def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tu
     (via add-item), it no longer matches the old barème value and is left
     alone rather than silently clobbered.
 
+    Only the invoice line items whose fee_type.code matches this config's
+    fee_category (SCOLARITE or INSCRIPTION) are touched — inscription and
+    scolarité are separate barème rows now, so a single recalculation call
+    only ever needs to update one side.
+
     Returns the number of invoices actually updated.
     """
     from django.db import transaction
 
-    reg_changed = fee_config.registration_fee != old_registration_fee
-    tuition_changed = fee_config.tuition_fee != old_tuition_fee
-    if not reg_changed and not tuition_changed:
+    if fee_config.amount == old_amount:
         return 0
+    target_code = fee_config.fee_category  # 'SCOLARITE' or 'INSCRIPTION'
 
     students = Student.objects.filter(is_active=True)
     if fee_config.site_id:
@@ -697,12 +715,8 @@ def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tu
                 changed = False
                 for item in invoice.items.all():
                     code = (item.fee_type.code or '').upper() if item.fee_type_id else ''
-                    if tuition_changed and code == 'SCOLARITE' and item.unit_price == old_tuition_fee:
-                        item.unit_price = fee_config.tuition_fee
-                        item.save(update_fields=['unit_price', 'total'])
-                        changed = True
-                    elif reg_changed and code == 'INSCRIPTION' and item.unit_price == old_registration_fee:
-                        item.unit_price = fee_config.registration_fee
+                    if code == target_code and item.unit_price == old_amount:
+                        item.unit_price = fee_config.amount
                         item.save(update_fields=['unit_price', 'total'])
                         changed = True
                 if changed:
@@ -716,11 +730,15 @@ def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tu
 
 
 class FeeInstallment(BaseModel):
-    """One dated tranche of a FeeConfiguration's total (registration + tuition),
-    e.g. "Inscription & réinscription" / "Octobre" / "Novembre" each with their
-    own due_date and amount. A FeeConfiguration with no installments has the
-    échéancier feature simply inactive for that site/filière/niveau (fully
-    backward compatible — nothing changes for configs that don't opt in)."""
+    """One dated tranche of a SCOLARITE FeeConfiguration's total, e.g.
+    "Octobre" / "Novembre" each with their own due_date and amount. A
+    FeeConfiguration with no installments has the échéancier feature simply
+    inactive for that site/filière/niveau (fully backward compatible —
+    nothing changes for configs that don't opt in).
+
+    Only ever attaches to a fee_category=SCOLARITE barème — inscription is
+    always paid in full at inscription, never split into installments (see
+    save()/clean() below)."""
     fee_configuration = models.ForeignKey(
         FeeConfiguration, on_delete=models.CASCADE, related_name='installments',
         verbose_name="Barème"
@@ -740,10 +758,22 @@ class FeeInstallment(BaseModel):
     def __str__(self):
         return f"{self.fee_configuration} — {self.label} ({self.amount} FCFA)"
 
+    def save(self, *args, **kwargs):
+        if self.fee_configuration.fee_category != 'SCOLARITE':
+            raise ValueError(
+                "L'échéancier ne peut être configuré que sur un barème de scolarité, "
+                "pas sur un barème d'inscription (payée intégralement à l'inscription)."
+            )
+        super().save(*args, **kwargs)
+
 
 def _resolve_fee_config_for_student(student, academic_year=None):
     """Shared level-resolution used by both compute_tuition_schedule_status
-    and get_student_installment_schedule, so they can never drift apart."""
+    and get_student_installment_schedule, so they can never drift apart.
+
+    Always resolves the SCOLARITE barème row — the échéancier de scolarité
+    only ever applies to tuition, never to inscription (paid in full at
+    inscription, no installment plan)."""
     level = None
     try:
         from apps.academic.models import Class as AcademicClass
@@ -757,7 +787,7 @@ def _resolve_fee_config_for_student(student, academic_year=None):
         pass
 
     return FeeConfiguration.get_for_enrollment(
-        student.site, level, academic_year,
+        student.site, level, 'SCOLARITE', academic_year,
         modality=student.modality, affectation_status=student.affectation_status
     )
 

@@ -390,21 +390,27 @@ class StudentViewSet(viewsets.ModelViewSet):
                         academic_year = AcademicYear.objects.get(pk=academic_year_id)
                     except Exception as e:
                         logger.warning('financial_summary: cannot load academic_year %s: %s', academic_year_id, e)
-            # Always attempt lookup — get_for_enrollment falls back to site-only when level=None
-            fee_config = FeeConfiguration.get_for_enrollment(
-                student.site, level, academic_year,
+            # Always attempt lookup — get_for_enrollment falls back to site-only when level=None.
+            # Inscription and scolarité are separate barème rows now — resolve each independently.
+            tuition_config = FeeConfiguration.get_for_enrollment(
+                student.site, level, 'SCOLARITE', academic_year,
                 modality=student.modality, affectation_status=student.affectation_status
             )
-            if fee_config:
-                configured_tuition = float(fee_config.tuition_fee)
-                configured_registration = float(fee_config.registration_fee)
-            else:
+            registration_config = FeeConfiguration.get_for_enrollment(
+                student.site, level, 'INSCRIPTION', academic_year,
+                modality=student.modality, affectation_status=student.affectation_status
+            )
+            if tuition_config:
+                configured_tuition = float(tuition_config.amount)
+            if registration_config:
+                configured_registration = float(registration_config.amount)
+            if not tuition_config and not registration_config:
                 level_id = str(level.id) if level else None
                 year_id = str(academic_year.id) if academic_year else None
                 logger.info(
                     'financial_summary: no fee config | site_id=%s | level_id=%s (%s) | year_id=%s (%s) | all_configs=%s',
                     student.site_id, level_id, level, year_id, academic_year,
-                    list(FeeConfiguration.objects.filter(is_active=True).values('id', 'site_id', 'level_id', 'academic_year_id', 'registration_fee', 'tuition_fee'))
+                    list(FeeConfiguration.objects.filter(is_active=True).values('id', 'site_id', 'level_id', 'academic_year_id', 'fee_category', 'amount'))
                 )
         except Exception as e:
             logger.error('financial_summary: unexpected error: %s', e, exc_info=True)
@@ -514,16 +520,20 @@ class StudentViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 logger.warning('prepare_invoices: cannot resolve level: %s', e)
 
-            fee_config = FeeConfiguration.get_for_enrollment(
-                site, level, current_year,
+            tuition_config = FeeConfiguration.get_for_enrollment(
+                site, level, 'SCOLARITE', current_year,
                 modality=student.modality, affectation_status=student.affectation_status
             )
-            tuition_amount = float(fee_config.tuition_fee if fee_config else (student.tuition_fee or 0))
-            reg_amount = float(fee_config.registration_fee if fee_config else (student.registration_fee or 0))
+            registration_config = FeeConfiguration.get_for_enrollment(
+                site, level, 'INSCRIPTION', current_year,
+                modality=student.modality, affectation_status=student.affectation_status
+            )
+            tuition_amount = float(tuition_config.amount if tuition_config else (student.tuition_fee or 0))
+            reg_amount = float(registration_config.amount if registration_config else (student.registration_fee or 0))
 
             logger.info(
-                'prepare_invoices: student=%s site=%s year=%s tuition=%.0f reg=%.0f fee_config=%s',
-                student.matricule, site, current_year, tuition_amount, reg_amount, fee_config
+                'prepare_invoices: student=%s site=%s year=%s tuition=%.0f reg=%.0f tuition_config=%s reg_config=%s',
+                student.matricule, site, current_year, tuition_amount, reg_amount, tuition_config, registration_config
             )
 
             due_date = (current_year.end_date if hasattr(current_year, 'end_date') and current_year.end_date

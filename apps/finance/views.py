@@ -765,16 +765,17 @@ class FeeConfigurationViewSet(viewsets.ModelViewSet):
         if affectation_status:
             qs = qs.filter(affectation_status=affectation_status)
 
+        fee_category = p.get('fee_category')
+        if fee_category:
+            qs = qs.filter(fee_category=fee_category)
+
         return qs
 
     def perform_update(self, serializer):
         old = self.get_object()
-        old_registration_fee = old.registration_fee
-        old_tuition_fee = old.tuition_fee
+        old_amount = old.amount
         fee_config = serializer.save()
-        self._invoices_recalculated = recalculate_invoices_for_fee_config(
-            fee_config, old_registration_fee, old_tuition_fee
-        )
+        self._invoices_recalculated = recalculate_invoices_for_fee_config(fee_config, old_amount)
 
     def update(self, request, *args, **kwargs):
         self._invoices_recalculated = 0

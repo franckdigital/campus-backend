@@ -70,19 +70,23 @@ class Command(BaseCommand):
             )
             self.stdout.write(f'  Classe: {class_obj.name}')
 
-            # ── 5. Bareme (site+programme+niveau+modalite+affectation) ────────
+            # ── 5. Baremes — inscription et scolarite sont 2 lignes separees ──
+            # (l'echeancier ne s'applique qu'a la scolarite ; l'inscription se
+            # paie toujours integralement, jamais en tranches)
+            reg_config, reg_created = FeeConfiguration.objects.get_or_create(
+                site=site, program=program, level=level, academic_year=academic_year,
+                modality='PRESENTIEL', affectation_status='AFFECTE', fee_category='INSCRIPTION',
+                defaults={'amount': 150000, 'label': '1ère année BTS Gestion Commerciale', 'is_active': True},
+            )
             fee_config, fc_created = FeeConfiguration.objects.get_or_create(
                 site=site, program=program, level=level, academic_year=academic_year,
-                modality='PRESENTIEL', affectation_status='AFFECTE',
-                defaults={
-                    'registration_fee': 150000, 'tuition_fee': 500000,
-                    'label': '1ère année BTS Gestion Commerciale',
-                    'is_active': True,
-                },
+                modality='PRESENTIEL', affectation_status='AFFECTE', fee_category='SCOLARITE',
+                defaults={'amount': 500000, 'label': '1ère année BTS Gestion Commerciale', 'is_active': True},
             )
-            self.stdout.write(f'  Bareme: {fee_config} ({"cree" if fc_created else "existe"})')
+            self.stdout.write(f'  Bareme inscription: {reg_config} ({"cree" if reg_created else "existe"})')
+            self.stdout.write(f'  Bareme scolarite: {fee_config} ({"cree" if fc_created else "existe"})')
 
-            # ── 6. Echeancier (tranches Mai + Juin) ────────────────────────────
+            # ── 6. Echeancier (tranches Mai + Juin) — sur le bareme SCOLARITE ──
             mai, mai_created = FeeInstallment.objects.get_or_create(
                 fee_configuration=fee_config, label='Mai',
                 defaults={'due_date': datetime.date(2026, 5, 25), 'amount': 250000, 'order': 0},
@@ -98,12 +102,13 @@ class Command(BaseCommand):
                 f'  Echeance Juin: {juin.amount} FCFA / {juin.due_date} ({"creee" if juin_created else "existe"})'
             )
 
-            # ── 7. FeeTypes + moyen de paiement ────────────────────────────────
+            # ── 7. FeeTypes (codes canoniques utilises par prepare-invoices/
+            # recalculate_invoices_for_fee_config) + moyen de paiement ─────────
             fee_inscr, _ = FeeType.objects.get_or_create(
-                code='INSCR', defaults={'name': "Frais d'inscription", 'default_amount': 150000},
+                code='INSCRIPTION', defaults={'name': "Frais d'inscription", 'default_amount': 150000},
             )
             fee_scol, _ = FeeType.objects.get_or_create(
-                code='SCOL', defaults={'name': 'Frais de scolarite', 'default_amount': 500000, 'is_recurring': True},
+                code='SCOLARITE', defaults={'name': 'Frais de scolarite', 'default_amount': 500000, 'is_recurring': True},
             )
             pay_method, _ = PaymentMethod.objects.get_or_create(
                 code='ESPECES', defaults={'name': 'Especes', 'is_online': False},

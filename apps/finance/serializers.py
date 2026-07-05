@@ -227,14 +227,28 @@ class FeeInstallmentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+    def validate_fee_configuration(self, value):
+        if value.fee_category != 'SCOLARITE':
+            raise serializers.ValidationError(
+                "L'échéancier ne peut être configuré que sur un barème de scolarité, "
+                "pas sur un barème d'inscription (payée intégralement à l'inscription)."
+            )
+        return value
+
 
 class FeeConfigurationSerializer(serializers.ModelSerializer):
+    # Model has a default (SCOLARITE) so a bare Django save() never fails
+    # accidentally — but through the API this must always be an explicit
+    # choice, never silently defaulted, since the two categories behave very
+    # differently (échéancier eligibility, "paid in full" business rule).
+    fee_category = serializers.ChoiceField(choices=FeeConfiguration.CATEGORY_CHOICES, required=True)
     site_name = serializers.SerializerMethodField()
     program_name = serializers.SerializerMethodField()
     level_name = serializers.SerializerMethodField()
     academic_year_name = serializers.SerializerMethodField()
     modality_name = serializers.SerializerMethodField()
     affectation_status_name = serializers.SerializerMethodField()
+    fee_category_name = serializers.SerializerMethodField()
     installments = FeeInstallmentSerializer(many=True, read_only=True)
 
     def get_site_name(self, obj):
@@ -255,13 +269,16 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
     def get_affectation_status_name(self, obj):
         return obj.get_affectation_status_display() if obj.affectation_status else None
 
+    def get_fee_category_name(self, obj):
+        return obj.get_fee_category_display()
+
     class Meta:
         model = FeeConfiguration
         fields = [
             'id', 'site', 'site_name', 'program', 'program_name',
             'level', 'level_name', 'academic_year', 'academic_year_name',
             'modality', 'modality_name', 'affectation_status', 'affectation_status_name',
-            'registration_fee', 'tuition_fee', 'label', 'is_active',
+            'fee_category', 'fee_category_name', 'amount', 'label', 'is_active',
             'installments',
             'created_at', 'updated_at'
         ]
