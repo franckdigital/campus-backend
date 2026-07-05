@@ -48,7 +48,7 @@ class NotificationListSerializer(serializers.ModelSerializer):
         model = Notification
         fields = [
             'id', 'notification_type', 'priority', 'title', 'message',
-            'is_read', 'created_at', 'action_url',
+            'data', 'is_read', 'created_at', 'action_url',
         ]
 
 
