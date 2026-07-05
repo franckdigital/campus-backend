@@ -21,7 +21,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from apps.students.models import Student
         from apps.academic.models import Class as AcademicClass
-        from apps.finance.models import FeeConfiguration, compute_tuition_schedule_status
+        from apps.finance.models import FeeConfiguration, compute_tuition_schedule_status, _resolve_fee_config_for_student
 
         if not options['email'] and not options['matricule']:
             raise CommandError('Pass --email or --matricule to identify the student.')
@@ -53,19 +53,20 @@ class Command(BaseCommand):
 
         enrollment_row = student.enrollments.filter(
             status='ENROLLED', is_active=True
-        ).order_by('-created_at').values_list('class_obj_id', flat=True).first()
+        ).order_by('-created_at').values_list('class_obj_id', 'academic_year_id').first()
 
         level = None
         if not enrollment_row:
-            self.stdout.write(self.style.ERROR('  -> AUCUNE inscription ENROLLED+active trouvée — level restera None.'))
+            self.stdout.write(self.style.ERROR('  -> AUCUNE inscription ENROLLED+active trouvée — level et academic_year resteront None.'))
         else:
-            self.stdout.write(f"  -> class_obj_id retenu = {enrollment_row}")
+            class_obj_id, academic_year_id = enrollment_row
+            self.stdout.write(f"  -> class_obj_id retenu = {class_obj_id} | academic_year_id retenu = {academic_year_id}")
             try:
-                class_obj = AcademicClass.objects.select_related('level', 'level__program').get(pk=enrollment_row)
+                class_obj = AcademicClass.objects.select_related('level', 'level__program').get(pk=class_obj_id)
                 level = class_obj.level
                 self.stdout.write(f"  -> classe = {class_obj} | niveau = {level} (id={level.id if level else None}) | programme = {level.program if level else None}")
             except AcademicClass.DoesNotExist:
-                self.stdout.write(self.style.ERROR(f'  -> Classe {enrollment_row} introuvable (supprimée ?).'))
+                self.stdout.write(self.style.ERROR(f'  -> Classe {class_obj_id} introuvable (supprimée ?).'))
 
         # ── Step 2: matching FeeConfiguration rows (SCOLARITE) ──────────────
         self.stdout.write(self.style.MIGRATE_HEADING('\n[2] Barèmes SCOLARITE actifs en base (toutes portées confondues)'))
@@ -79,12 +80,10 @@ class Command(BaseCommand):
                 f"amount={cfg.amount} installments={cfg.installments.count()}"
             )
 
-        # ── Step 3: actual resolution (get_for_enrollment cascade) ─────────
-        self.stdout.write(self.style.MIGRATE_HEADING('\n[3] Résolution via get_for_enrollment (cascade la plus précise -> la plus générale)'))
-        resolved = FeeConfiguration.get_for_enrollment(
-            student.site, level, 'SCOLARITE', None,
-            modality=student.modality, affectation_status=student.affectation_status
-        )
+        # ── Step 3: actual resolution (real shared resolver — site + level +
+        # academic_year auto-resolved from the enrollment + modality/affectation) ──
+        self.stdout.write(self.style.MIGRATE_HEADING('\n[3] Résolution via _resolve_fee_config_for_student (le vrai chemin utilisé partout)'))
+        resolved = _resolve_fee_config_for_student(student)
         if resolved:
             self.stdout.write(self.style.SUCCESS(f"  -> Résolu : {resolved} (id={resolved.id}, amount={resolved.amount}, installments={resolved.installments.count()})"))
         else:

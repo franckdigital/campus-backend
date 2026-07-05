@@ -805,19 +805,32 @@ def _resolve_fee_config_for_student(student, academic_year=None):
     only ever applies to tuition, never to inscription (paid in full at
     inscription, no installment plan)."""
     level = None
+    # Only auto-resolve the academic_year from the enrollment when the caller
+    # didn't already pass one explicitly. Without this, get_for_enrollment's
+    # most-specific tier (site+level+YEAR) is always skipped (academic_year
+    # stays None), and its year-agnostic tier only matches barèmes with a
+    # blank academic_year — a barème configured for a specific year (the
+    # normal case, mirrors financial_summary's own resolution) then never
+    # matches at all, silently making has_schedule=False for every student.
+    resolved_academic_year = academic_year
     try:
         from apps.academic.models import Class as AcademicClass
         enrollment_row = student.enrollments.filter(
             status='ENROLLED', is_active=True
-        ).order_by('-created_at').values_list('class_obj_id', flat=True).first()
+        ).order_by('-created_at').values_list('class_obj_id', 'academic_year_id').first()
         if enrollment_row:
-            class_obj = AcademicClass.objects.select_related('level').get(pk=enrollment_row)
-            level = class_obj.level
+            class_obj_id, academic_year_id = enrollment_row
+            if class_obj_id:
+                class_obj = AcademicClass.objects.select_related('level').get(pk=class_obj_id)
+                level = class_obj.level
+            if not resolved_academic_year and academic_year_id:
+                from apps.core.models import AcademicYear
+                resolved_academic_year = AcademicYear.objects.filter(pk=academic_year_id).first()
     except Exception:
         pass
 
     return FeeConfiguration.get_for_enrollment(
-        student.site, level, 'SCOLARITE', academic_year,
+        student.site, level, 'SCOLARITE', resolved_academic_year,
         modality=student.modality, affectation_status=student.affectation_status
     )
 
