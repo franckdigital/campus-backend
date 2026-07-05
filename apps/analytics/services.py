@@ -243,6 +243,16 @@ def compute_student_kpis(student, semester):
     attendance = compute_attendance_kpis(student, semester)
     academic = compute_academic_kpis(student, class_group, semester)
     trend = get_semester_history(student, semester)
+
+    # If the current semester has no grades yet (e.g. just started), fall
+    # back to the most recent semester that does, so the KPI card and the
+    # risk score aren't blank/neutral while real historical data exists.
+    if academic['grade_global_average'] is None:
+        for h in reversed(trend['history']):
+            if h['average'] is not None:
+                academic['grade_global_average'] = h['average']
+                break
+
     risk_score, risk_level, risk_components = compute_risk_score(academic, attendance, trend)
 
     return {
@@ -274,8 +284,128 @@ AI_SYSTEM_PROMPT = (
 )
 
 
+def _rule_based_analysis(kpi_payload):
+    """Deterministic French analysis engine — no LLM call, no API cost.
+    Mirrors the same five sections the real Claude prompt would produce,
+    but every sentence is derived from plain thresholds on the already-
+    computed KPIs (nothing invented, fully auditable). Used by default;
+    if ANTHROPIC_API_KEY is ever configured, generate_ai_analysis switches
+    to a real Claude call automatically instead."""
+    kpis = kpi_payload.get('kpis') or {}
+    trend = kpi_payload.get('trend') or {}
+    risk = kpi_payload.get('risk') or {}
+    components = risk.get('components') or {}
+
+    avg = kpis.get('grade_global_average')
+    attendance_rate = kpis.get('attendance_rate')
+    late_rate = kpis.get('late_rate')
+    punctuality_rate = round(100 - late_rate, 1) if late_rate is not None else None
+    weak = kpis.get('weak_subjects') or []
+    subject_averages = kpis.get('subject_averages') or []
+    strong = sorted(
+        [s for s in subject_averages if s.get('average') is not None and s['average'] >= 14],
+        key=lambda s: -s['average'],
+    )[:3]
+    delta = trend.get('delta_vs_previous')
+    class_average = trend.get('class_average')
+    class_rank = trend.get('class_rank')
+    class_total = trend.get('class_total_students')
+
+    avg_txt = f"{avg:.2f}/20" if avg is not None else "non disponible"
+    att_txt = f"{attendance_rate}%" if attendance_rate is not None else "non disponible"
+    punct_txt = f"{punctuality_rate}%" if punctuality_rate is not None else "non disponible"
+
+    # SYNTHÈSE
+    synthese = (
+        f"Moyenne générale : {avg_txt}. Taux de présence : {att_txt}. "
+        f"Taux de ponctualité : {punct_txt}. Niveau de risque : "
+        f"{risk.get('level', '—')} ({risk.get('score', '—')}/100)."
+    )
+    if class_average is not None and avg is not None:
+        ecart = round(avg - class_average, 2)
+        if ecart >= 0.5:
+            synthese += f" Au-dessus de la moyenne de la classe ({class_average}/20, écart de +{ecart})."
+        elif ecart <= -0.5:
+            synthese += f" En dessous de la moyenne de la classe ({class_average}/20, écart de {ecart})."
+        else:
+            synthese += f" Dans la moyenne de la classe ({class_average}/20)."
+    if class_rank and class_total:
+        synthese += f" Rang {class_rank}/{class_total}."
+
+    # POINTS FORTS
+    forts = []
+    if avg is not None and avg >= 14:
+        forts.append(f"Moyenne générale solide ({avg:.2f}/20).")
+    if strong:
+        noms = ', '.join(f"{s['subject_name']} ({s['average']}/20)" for s in strong)
+        forts.append(f"Bons résultats en : {noms}.")
+    if attendance_rate is not None and attendance_rate >= 90:
+        forts.append(f"Très bonne assiduité ({attendance_rate}%).")
+    if punctuality_rate is not None and punctuality_rate >= 95:
+        forts.append(f"Ponctualité exemplaire ({punctuality_rate}%).")
+    if delta is not None and delta > 0:
+        forts.append(f"Progression positive par rapport au semestre précédent (+{delta} point(s)).")
+    if class_rank and class_total and class_rank <= max(3, round(class_total * 0.1)):
+        forts.append(f"Fait partie des meilleurs élèves de la classe (rang {class_rank}/{class_total}).")
+    if not forts:
+        forts.append("Aucun point fort ne se détache nettement dans les données actuelles ; les efforts doivent porter sur l'ensemble des matières.")
+
+    # MATIÈRES À RENFORCER
+    if weak:
+        matieres = [f"- {s['subject_name']} ({s['average']}/20) : priorité {'haute' if s['average'] < 7 else 'moyenne'}." for s in weak]
+    else:
+        matieres = ["- Aucune matière particulièrement faible identifiée."]
+
+    # CONSEILS DE MÉTHODE DE TRAVAIL
+    conseils = []
+    if weak:
+        noms_faibles = ', '.join(s['subject_name'] for s in weak)
+        conseils.append(f"Consacrer des créneaux de révision réguliers et courts aux matières faibles ({noms_faibles}), avec des exercices supplémentaires plutôt qu'une révision passive.")
+        conseils.append("Solliciter le professeur ou un(e) camarade pour reprendre les notions mal comprises avant qu'elles ne s'accumulent.")
+    elif avg is not None and avg < 14:
+        conseils.append("Consolider les acquis par des exercices d'entraînement réguliers sur l'ensemble des matières pour viser une moyenne plus élevée.")
+    if attendance_rate is not None and attendance_rate < 90:
+        conseils.append(f"Améliorer l'assiduité ({attendance_rate}% actuellement) : chaque absence non justifiée crée un retard difficile à rattraper.")
+    if punctuality_rate is not None and punctuality_rate < 90:
+        conseils.append(f"Travailler la ponctualité ({punctuality_rate}% actuellement) : arriver à l'heure évite de manquer le début des explications.")
+    if delta is not None and delta < 0:
+        conseils.append(f"Identifier la cause de la baisse de moyenne ce semestre ({delta} point(s)) et en discuter avec les professeurs concernés dès que possible.")
+    if not conseils:
+        conseils.append("Maintenir le rythme de travail actuel, qui donne de bons résultats.")
+
+    # EXPLICATION DU RISQUE
+    if components:
+        weakest_key = min(components, key=lambda k: components[k])
+        labels = {
+            'academic': 'la moyenne générale', 'attendance': "l'assiduité",
+            'punctuality': 'la ponctualité', 'trend': 'la tendance de progression',
+        }
+        explication = (
+            f"Score de risque {risk.get('score', '—')}/100 ({risk.get('level', '—')}), calculé à partir "
+            f"de la moyenne (poids {int(RISK_WEIGHTS['academic'] * 100)}%), de l'assiduité "
+            f"(poids {int(RISK_WEIGHTS['attendance'] * 100)}%), de la ponctualité "
+            f"(poids {int(RISK_WEIGHTS['punctuality'] * 100)}%) et de la tendance "
+            f"(poids {int(RISK_WEIGHTS['trend'] * 100)}%). "
+            f"Le facteur qui pèse le plus sur le risque actuellement est {labels.get(weakest_key, weakest_key)} "
+            f"({components[weakest_key]}/100)."
+        )
+    else:
+        explication = f"Score de risque {risk.get('score', '—')}/100 ({risk.get('level', '—')})."
+
+    return (
+        "SYNTHÈSE:\n" + synthese + "\n\n"
+        "POINTS FORTS:\n" + '\n'.join(f"- {f}" for f in forts) + "\n\n"
+        "MATIÈRES À RENFORCER:\n" + '\n'.join(matieres) + "\n\n"
+        "CONSEILS DE MÉTHODE DE TRAVAIL:\n" + '\n'.join(f"- {c}" for c in conseils) + "\n\n"
+        "EXPLICATION DU RISQUE:\n- " + explication
+    )
+
+
 def generate_ai_analysis(kpi_payload):
-    from apps.elearning.ai_service import _call_claude
+    from apps.elearning.ai_service import _call_claude, ANTHROPIC_API_KEY
+
+    if not ANTHROPIC_API_KEY:
+        return _rule_based_analysis(kpi_payload), 0
 
     message = (
         "Voici les données factuelles de l'étudiant (utilise-les telles "

@@ -27,6 +27,7 @@ urlpatterns = [
         path('', include('apps.reports.urls')),
         path('', include('apps.grades.urls')),
         path('', include('apps.staff.urls')),
+        path('', include('apps.landing.urls')),
     ])),
     
     # API Documentation
