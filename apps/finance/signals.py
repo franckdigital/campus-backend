@@ -99,10 +99,68 @@ def _get_or_create_open_session(site, payment_method=None):
     return session
 
 
+def _auto_create_cash_transaction(instance):
+    """Best-effort cash-register bookkeeping side effect. Must never be able
+    to skip the invoice amount_paid sync in on_payment_save — this used to
+    live inline in that function with early `return`s that, on no-open-session
+    or already-has-a-cash-tx, exited the WHOLE signal handler and silently
+    skipped the invoice sync below it. Extracted into its own function so its
+    `return`s only ever exit this helper.
+    """
+    from .models import CashTransaction
+
+    # Skip if a cash transaction already exists for this payment (idempotent)
+    if CashTransaction.objects.filter(payment=instance).exists():
+        return
+
+    student = instance.invoice.student
+    site = getattr(instance.invoice, 'site', None) or getattr(student, 'site', None)
+
+    open_session = _get_or_create_open_session(site, payment_method=instance.payment_method)
+    if not open_session:
+        logger.warning(
+            "on_payment_save: no cash register for site %s — skipping auto cash TX (payment %s)",
+            site, instance.id,
+        )
+        return
+
+    # Human-readable description
+    inv = instance.invoice
+    is_inscription = inv.items.filter(
+        fee_type__code__iregex=r'inscri|reg'
+    ).exists()
+    fee_label = "Frais d'inscription" if is_inscription else "Frais de scolarité"
+    student_name = student.user.full_name or str(student)
+    description = f"{fee_label} — {student_name} (facture {inv.invoice_number})"
+
+    ref_date = instance.created_at.strftime('%Y%m%d') if instance.created_at else ''
+    reference = f"PAY-{ref_date}-{str(instance.id)[:8].upper()}"
+
+    tx = CashTransaction.objects.create(
+        session=open_session,
+        payment=instance,
+        transaction_type='IN',
+        amount=instance.amount,
+        description=description,
+        reference=reference,
+    )
+
+    # Update running balance on the register
+    open_session.cash_register.current_balance += instance.amount
+    open_session.cash_register.save(update_fields=['current_balance'])
+
+    logger.info(
+        "Auto cash TX %s created: %s FCFA → session %s / register '%s' (payment %s)",
+        tx.id, instance.amount, open_session.id,
+        open_session.cash_register.name, instance.id,
+    )
+
+
 @receiver(post_save, sender=Payment)
 def on_payment_save(sender, instance, created, **kwargs):
     """
     When a payment reaches status=SUCCESS:
+    - Sync the invoice's amount_paid/balance/status from all SUCCESS payments
     - Push-notify student and parents
     - Auto-create a CashTransaction IN on the site's cash register
       (auto-opens a session if none is active)
@@ -110,70 +168,11 @@ def on_payment_save(sender, instance, created, **kwargs):
     if instance.status != 'SUCCESS':
         return
 
-    # ── Notifications (in-app + push) ────────────────────────────────────
-    try:
-        from apps.notifications.services import notify_payment_validated
-        notify_payment_validated(instance)
-    except Exception as exc:
-        logger.error("Payment notify failed for payment %s: %s", instance.id, exc)
-
-    # ── Auto cash transaction ─────────────────────────────────────────────
-    try:
-        from .models import CashTransaction
-
-        # Skip if a cash transaction already exists for this payment (idempotent)
-        if CashTransaction.objects.filter(payment=instance).exists():
-            return
-
-        student = instance.invoice.student
-        site = getattr(instance.invoice, 'site', None) or getattr(student, 'site', None)
-
-        open_session = _get_or_create_open_session(site, payment_method=instance.payment_method)
-        if not open_session:
-            logger.warning(
-                "on_payment_save: no cash register for site %s — skipping auto cash TX (payment %s)",
-                site, instance.id,
-            )
-            return
-
-        # Human-readable description
-        inv = instance.invoice
-        is_inscription = inv.items.filter(
-            fee_type__code__iregex=r'inscri|reg'
-        ).exists()
-        fee_label = "Frais d'inscription" if is_inscription else "Frais de scolarité"
-        student_name = student.user.full_name or str(student)
-        description = f"{fee_label} — {student_name} (facture {inv.invoice_number})"
-
-        ref_date = instance.created_at.strftime('%Y%m%d') if instance.created_at else ''
-        reference = f"PAY-{ref_date}-{str(instance.id)[:8].upper()}"
-
-        tx = CashTransaction.objects.create(
-            session=open_session,
-            payment=instance,
-            transaction_type='IN',
-            amount=instance.amount,
-            description=description,
-            reference=reference,
-        )
-
-        # Update running balance on the register
-        open_session.cash_register.current_balance += instance.amount
-        open_session.cash_register.save(update_fields=['current_balance'])
-
-        logger.info(
-            "Auto cash TX %s created: %s FCFA → session %s / register '%s' (payment %s)",
-            tx.id, instance.amount, open_session.id,
-            open_session.cash_register.name, instance.id,
-        )
-
-    except Exception as exc:
-        logger.error(
-            "Auto cash transaction failed for payment %s: %s",
-            instance.id, exc, exc_info=True,
-        )
-
-    # ── Sync invoice amount_paid from all SUCCESS payments (idempotent safety net) ──
+    # ── Sync invoice amount_paid from all SUCCESS payments (source of truth
+    # for every total/balance shown across admin, student web and mobile) —
+    # this must run unconditionally, independent of the best-effort steps
+    # below, so a failure/skip in cash-register bookkeeping or notifications
+    # can never leave the invoice's totals stale. ──────────────────────────
     try:
         invoice = instance.invoice
         invoice.refresh_from_db()
@@ -192,4 +191,20 @@ def on_payment_save(sender, instance, created, **kwargs):
     except Exception as exc:
         logger.error(
             "Invoice sync failed for payment %s: %s", instance.id, exc, exc_info=True,
+        )
+
+    # ── Notifications (in-app + push) ────────────────────────────────────
+    try:
+        from apps.notifications.services import notify_payment_validated
+        notify_payment_validated(instance)
+    except Exception as exc:
+        logger.error("Payment notify failed for payment %s: %s", instance.id, exc)
+
+    # ── Auto cash transaction ─────────────────────────────────────────────
+    try:
+        _auto_create_cash_transaction(instance)
+    except Exception as exc:
+        logger.error(
+            "Auto cash transaction failed for payment %s: %s",
+            instance.id, exc, exc_info=True,
         )
