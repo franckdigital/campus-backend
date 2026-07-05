@@ -223,6 +223,7 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
     program_name = serializers.SerializerMethodField()
     level_name = serializers.SerializerMethodField()
     academic_year_name = serializers.SerializerMethodField()
+    modality_name = serializers.SerializerMethodField()
 
     def get_site_name(self, obj):
         return obj.site.name if obj.site_id and obj.site else None
@@ -236,11 +237,15 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
     def get_academic_year_name(self, obj):
         return obj.academic_year.name if obj.academic_year_id and obj.academic_year else None
 
+    def get_modality_name(self, obj):
+        return obj.get_modality_display() if obj.modality else None
+
     class Meta:
         model = FeeConfiguration
         fields = [
             'id', 'site', 'site_name', 'program', 'program_name',
             'level', 'level_name', 'academic_year', 'academic_year_name',
+            'modality', 'modality_name',
             'registration_fee', 'tuition_fee', 'label', 'is_active',
             'created_at', 'updated_at'
         ]

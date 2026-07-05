@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.filters import OrderingFilter
+from rest_framework.filters import OrderingFilter, SearchFilter
 from django.utils import timezone
 from django.db.models import Count
 from django.conf import settings
@@ -20,6 +20,7 @@ from .serializers import (
     AttendanceRecordSerializer, QRScanSerializer,
     AbsenceRequestSerializer, AbsenceRequestCreateSerializer
 )
+from .filters import AttendanceRecordFilter
 from apps.students.models import Student
 from apps.academic.models import Enrollment
 
@@ -208,15 +209,22 @@ class AttendanceScanView(APIView):
 class AttendanceRecordViewSet(viewsets.ModelViewSet):
     queryset = AttendanceRecord.objects.select_related(
         'attendance_session__session__subject',
-        'attendance_session__session__class_obj',
+        'attendance_session__session__class_obj__site',
+        'attendance_session__session__class_obj__level__program',
         'attendance_session__session__teacher__user',
         'attendance_session__session__room',
         'student__user', 'marked_by'
     ).all()
     serializer_class = AttendanceRecordSerializer
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter]
     ordering_fields = ['check_in_time', 'status']
-    filterset_fields = ['attendance_session', 'student', 'status', 'check_in_method']
+    filterset_class = AttendanceRecordFilter
+    search_fields = [
+        'student__user__first_name', 'student__user__last_name', 'student__matricule',
+        'attendance_session__session__subject__name',
+        'attendance_session__session__teacher__user__first_name',
+        'attendance_session__session__teacher__user__last_name',
+    ]
 
     @action(detail=False, methods=['post'], url_path='mark')
     def mark(self, request):

@@ -11,6 +11,11 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField()
     room_name = serializers.SerializerMethodField()
     start_time = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    site = serializers.SerializerMethodField()
+    site_name = serializers.SerializerMethodField()
+    level_name = serializers.SerializerMethodField()
+    program_name = serializers.SerializerMethodField()
 
     def get_teacher_name(self, obj):
         try:
@@ -32,11 +37,42 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_class_name(self, obj):
+        try:
+            return obj.attendance_session.session.class_obj.name
+        except Exception:
+            return None
+
+    def get_site(self, obj):
+        try:
+            return str(obj.attendance_session.session.class_obj.site_id)
+        except Exception:
+            return None
+
+    def get_site_name(self, obj):
+        try:
+            return obj.attendance_session.session.class_obj.site.name
+        except Exception:
+            return None
+
+    def get_level_name(self, obj):
+        try:
+            return obj.attendance_session.session.class_obj.level.name
+        except Exception:
+            return None
+
+    def get_program_name(self, obj):
+        try:
+            return obj.attendance_session.session.class_obj.level.program.name
+        except Exception:
+            return None
+
     class Meta:
         model = AttendanceRecord
         fields = [
             'id', 'attendance_session', 'student', 'student_name', 'student_matricule',
             'status', 'date', 'subject_name', 'teacher_name', 'room_name', 'start_time',
+            'class_name', 'site', 'site_name', 'level_name', 'program_name',
             'check_in_time', 'check_in_method', 'notes',
             'marked_by', 'marked_by_name', 'is_active', 'created_at'
         ]

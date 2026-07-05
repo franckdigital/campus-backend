@@ -29,6 +29,17 @@ class CinetPayTransactionViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['initiated_at', 'amount', 'status']
     filterset_fields = ['invoice', 'status', 'is_active']
+    # A student needs to see/poll their own payment transactions even before
+    # the registration fee is paid — this is the payment flow itself (see
+    # apps.students.permissions). get_queryset below makes that safe.
+    fee_gate_exempt = True
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.user.user_type == 'STUDENT':
+            # A student may only ever see their own transactions.
+            return qs.filter(invoice__student__user=self.request.user)
+        return qs
 
     @action(detail=True, methods=['get'])
     def check_status(self, request, pk=None):
@@ -42,6 +53,10 @@ class CinetPayTransactionViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class CinetPayInitiateView(APIView):
+    # Starting a Mobile Money payment is exactly how an unpaid student pays
+    # their registration fee in the first place — must stay reachable.
+    fee_gate_exempt = True
+
     def post(self, request):
         serializer = CinetPayInitiateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -219,6 +234,9 @@ class CinetPayCallbackView(APIView):
 
 
 class CinetPayStatusView(APIView):
+    # Polling payment status is part of the payment flow itself.
+    fee_gate_exempt = True
+
     def get(self, request, transaction_id):
         try:
             transaction = CinetPayTransaction.objects.get(transaction_id=transaction_id)
@@ -320,6 +338,11 @@ class CinetPayDemoPayView(APIView):
     à partir d'une transaction déjà initiée (status=FAILED).
     Sécurisé : vérifie que la transaction appartient à l'utilisateur connecté.
     """
+    # NOTE: this explicit permission_classes already replaces
+    # DEFAULT_PERMISSION_CLASSES entirely (DRF doesn't merge the two), so
+    # IsRegistrationFeePaidOrExempt never runs here regardless — fee_gate_exempt
+    # is set anyway for documentation, in case that override is ever removed.
+    fee_gate_exempt = True
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):

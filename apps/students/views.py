@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 
@@ -74,6 +75,10 @@ class StudentViewSet(viewsets.ModelViewSet):
     search_fields = ['matricule', 'user__email', 'user__first_name', 'user__last_name']
     ordering_fields = ['user__last_name', 'matricule', 'admission_date']
     filterset_fields = ['status', 'is_active', 'site', 'gender']
+    # A student whose registration fee is unpaid may still check their own
+    # profile/financial summary (fee-gated on everything else — see
+    # apps.students.permissions.IsRegistrationFeePaidOrExempt).
+    fee_gate_exempt_actions = ('me', 'financial_summary')
 
     def get_queryset(self):
         base = Student.objects.select_related('user', 'site')
@@ -109,11 +114,50 @@ class StudentViewSet(viewsets.ModelViewSet):
         except Student.DoesNotExist:
             return Response({'detail': 'Profil étudiant non trouvé.'}, status=status.HTTP_404_NOT_FOUND)
 
+    @staticmethod
+    def _check_own_student_access(request, student):
+        """financial_summary/dossier expose a student's private data by pk with
+        no other filtering — restrict to admin/staff, the student themselves,
+        or a parent actually linked to that student (not just any parent)."""
+        user = request.user
+        if user.user_type in ('ADMIN', 'STAFF'):
+            return
+        if user.user_type == 'STUDENT' and student.user_id == user.id:
+            return
+        if user.user_type == 'PARENT':
+            if StudentParent.objects.filter(student=student, parent__user=user).exists():
+                return
+        raise PermissionDenied("Vous n'êtes pas autorisé à consulter ces informations.")
+
     @action(detail=True, methods=['get'])
     def dossier(self, request, pk=None):
         student = self.get_object()
+        self._check_own_student_access(request, student)
         serializer = StudentDossierSerializer(student)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='kpi-analysis')
+    def kpi_analysis(self, request, pk=None):
+        student = self.get_object()
+        self._check_own_student_access(request, student)
+
+        from apps.academic.models import Semester
+        from apps.analytics.services import get_or_generate_analysis
+
+        semester = None
+        semester_id = request.query_params.get('semester')
+        if semester_id:
+            semester = Semester.objects.filter(id=semester_id).first()
+
+        # Only admin/staff can trigger a paid LLM regeneration — parents and
+        # students always get whatever is already cached.
+        refresh = (
+            request.query_params.get('refresh') == 'true'
+            and request.user.user_type in ('ADMIN', 'STAFF')
+        )
+
+        data = get_or_generate_analysis(student, semester=semester, refresh=refresh)
+        return Response(data)
 
     @action(detail=True, methods=['post'], url_path='link-parent')
     def link_parent(self, request, pk=None):
@@ -283,6 +327,7 @@ class StudentViewSet(viewsets.ModelViewSet):
         from django.db.models import Sum
 
         student = self.get_object()
+        self._check_own_student_access(request, student)
         invoices = Invoice.objects.filter(student=student, is_active=True)
 
         total_tuition  = float(invoices.aggregate(t=Sum('total'))['t']       or 0)
@@ -346,7 +391,7 @@ class StudentViewSet(viewsets.ModelViewSet):
                     except Exception as e:
                         logger.warning('financial_summary: cannot load academic_year %s: %s', academic_year_id, e)
             # Always attempt lookup — get_for_enrollment falls back to site-only when level=None
-            fee_config = FeeConfiguration.get_for_enrollment(student.site, level, academic_year)
+            fee_config = FeeConfiguration.get_for_enrollment(student.site, level, academic_year, modality=student.modality)
             if fee_config:
                 configured_tuition = float(fee_config.tuition_fee)
                 configured_registration = float(fee_config.registration_fee)
@@ -431,7 +476,7 @@ class StudentViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 logger.warning('prepare_invoices: cannot resolve level: %s', e)
 
-            fee_config = FeeConfiguration.get_for_enrollment(site, level, current_year)
+            fee_config = FeeConfiguration.get_for_enrollment(site, level, current_year, modality=student.modality)
             tuition_amount = float(fee_config.tuition_fee if fee_config else (student.tuition_fee or 0))
             reg_amount = float(fee_config.registration_fee if fee_config else (student.registration_fee or 0))
 

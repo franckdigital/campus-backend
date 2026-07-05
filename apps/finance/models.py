@@ -262,7 +262,7 @@ class Payment(BaseModel):
                 self.invoice.refresh_from_db()
                 if self.invoice.status == 'PAID':
                     is_reg = (
-                        self.invoice.items.filter(fee_type__code__icontains='REGISTRATION').exists()
+                        self.invoice.items.filter(fee_type__code__iregex=r'inscri|reg').exists()
                         or 'inscription' in (self.invoice.notes or '').lower()
                     )
                     if is_reg:
@@ -532,7 +532,15 @@ def create_enrollment_on_registration_invoice(sender, instance, created, **kwarg
 
 
 class FeeConfiguration(BaseModel):
-    """Barème des frais de scolarité et d'inscription par site / filière / niveau / année."""
+    """Barème des frais de scolarité et d'inscription par site / filière / niveau / année / modalité."""
+    # Mirrors Student.MODALITY_CHOICES (apps.students.models) — duplicated
+    # here rather than imported to avoid a cross-app import at module load
+    # time; keep the two lists in sync if modalities ever change.
+    MODALITY_CHOICES = [
+        ('PRESENTIEL', 'Présentiel'),
+        ('ELEARNING', 'E-learning'),
+        ('HYBRIDE', 'Hybride'),
+    ]
     site = models.ForeignKey(
         Site, on_delete=models.CASCADE, related_name='fee_configurations',
         null=True, blank=True, verbose_name="Site"
@@ -549,6 +557,11 @@ class FeeConfiguration(BaseModel):
         AcademicYear, on_delete=models.CASCADE, related_name='fee_configurations',
         null=True, blank=True, verbose_name="Année académique"
     )
+    modality = models.CharField(
+        max_length=20, choices=MODALITY_CHOICES, null=True, blank=True,
+        verbose_name="Modalité",
+        help_text="Laisser vide pour appliquer ce barème à toutes les modalités"
+    )
     registration_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais d'inscription")
     tuition_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Frais de scolarité")
     label = models.CharField(max_length=200, blank=True, verbose_name="Libellé")
@@ -563,30 +576,114 @@ class FeeConfiguration(BaseModel):
     def __str__(self):
         parts = [self.site.name if self.site else 'Tous sites',
                  self.program.name if self.program else 'Toutes filières',
-                 self.level.name if self.level else 'Tous niveaux']
+                 self.level.name if self.level else 'Tous niveaux',
+                 self.get_modality_display() if self.modality else 'Toutes modalités']
         return ' / '.join(parts)
 
     @classmethod
-    def get_for_enrollment(cls, site, level, academic_year=None):
-        """Return the best-matching fee config for a given site + level."""
+    def get_for_enrollment(cls, site, level, academic_year=None, modality=None):
+        """Return the best-matching fee config for a given site + level + modality.
+
+        Modality is matched strictly in the four most-specific tiers (a
+        student's fee genuinely differs between présentiel/e-learning/hybride),
+        then relaxed to "any modality" (modality=None, the wildcard row) in the
+        last two, broadest fallback tiers — mirroring how site/level/program
+        already relax from most to least specific.
+        """
         qs = cls.objects.filter(is_active=True)
-        # Most specific: site + level + year
+        # Most specific: site + modality + level + year
         if academic_year:
-            cfg = qs.filter(site=site, level=level, academic_year=academic_year).first()
+            cfg = qs.filter(site=site, modality=modality, level=level, academic_year=academic_year).first()
             if cfg:
                 return cfg
-        # site + level (any year)
-        cfg = qs.filter(site=site, level=level, academic_year=None).first()
+        # site + modality + level (any year)
+        cfg = qs.filter(site=site, modality=modality, level=level, academic_year=None).first()
         if cfg:
             return cfg
-        # site + program
+        # site + modality + program
         if level and level.program_id:
-            cfg = qs.filter(site=site, program_id=level.program_id, level=None).first()
+            cfg = qs.filter(site=site, modality=modality, program_id=level.program_id, level=None).first()
             if cfg:
                 return cfg
-        # site only
-        cfg = qs.filter(site=site, level=None, program=None).first()
+        # site + modality only
+        cfg = qs.filter(site=site, modality=modality, level=None, program=None).first()
         if cfg:
             return cfg
-        # global fallback
-        return qs.filter(site=None, level=None, program=None).first()
+        # site only (any modality)
+        cfg = qs.filter(site=site, modality=None, level=None, program=None).first()
+        if cfg:
+            return cfg
+        # global fallback (any modality)
+        return qs.filter(site=None, modality=None, level=None, program=None).first()
+
+
+def recalculate_invoices_for_fee_config(fee_config, old_registration_fee, old_tuition_fee):
+    """When a barème (FeeConfiguration) is edited, push the new amounts onto
+    already-issued but unpaid/partially-paid invoices for students matching
+    that config's scope (site/modality/level-or-program). Already-PAID and
+    CANCELLED invoices are never touched. A line item is only overwritten
+    when its current unit_price still equals the OLD barème amount — if a
+    staff member manually discounted/scholarshiped a specific student's item
+    (via add-item), it no longer matches the old barème value and is left
+    alone rather than silently clobbered.
+
+    Returns the number of invoices actually updated.
+    """
+    from django.db import transaction
+
+    reg_changed = fee_config.registration_fee != old_registration_fee
+    tuition_changed = fee_config.tuition_fee != old_tuition_fee
+    if not reg_changed and not tuition_changed:
+        return 0
+
+    students = Student.objects.filter(is_active=True)
+    if fee_config.site_id:
+        students = students.filter(site_id=fee_config.site_id)
+    if fee_config.modality:
+        students = students.filter(modality=fee_config.modality)
+    if fee_config.level_id:
+        students = students.filter(
+            enrollments__status='ENROLLED', enrollments__is_active=True,
+            enrollments__class_obj__level_id=fee_config.level_id,
+        )
+    elif fee_config.program_id:
+        students = students.filter(
+            enrollments__status='ENROLLED', enrollments__is_active=True,
+            enrollments__class_obj__level__program_id=fee_config.program_id,
+        )
+    if fee_config.academic_year_id:
+        students = students.filter(enrollments__academic_year_id=fee_config.academic_year_id)
+    students = students.distinct()
+
+    updated = 0
+    # The auto-enrollment signal is a guaranteed no-op during a price
+    # recalculation (the enrollment already exists) — disconnect it for the
+    # duration to avoid 2 wasted queries per invoice save.
+    post_save.disconnect(create_enrollment_on_registration_invoice, sender=Invoice)
+    try:
+        with transaction.atomic():
+            invoices = (
+                Invoice.objects.filter(student__in=students, is_active=True)
+                .exclude(status__in=['PAID', 'CANCELLED'])
+                .prefetch_related('items__fee_type')
+            )
+            for invoice in invoices:
+                changed = False
+                for item in invoice.items.all():
+                    code = (item.fee_type.code or '').upper() if item.fee_type_id else ''
+                    if tuition_changed and code == 'SCOLARITE' and item.unit_price == old_tuition_fee:
+                        item.unit_price = fee_config.tuition_fee
+                        item.save(update_fields=['unit_price', 'total'])
+                        changed = True
+                    elif reg_changed and code == 'INSCRIPTION' and item.unit_price == old_registration_fee:
+                        item.unit_price = fee_config.registration_fee
+                        item.save(update_fields=['unit_price', 'total'])
+                        changed = True
+                if changed:
+                    invoice.refresh_from_db()
+                    invoice.save()  # recompute totals/balance/status
+                    updated += 1
+    finally:
+        post_save.connect(create_enrollment_on_registration_invoice, sender=Invoice)
+
+    return updated

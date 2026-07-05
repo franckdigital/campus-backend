@@ -54,6 +54,11 @@ class LoginView(APIView):
 
 
 class MeView(APIView):
+    # Critical: both web and mobile call this at app bootstrap to resolve
+    # user_type and route accordingly — must never be blocked by the
+    # registration-fee gate, or unpaid students couldn't even load the app.
+    fee_gate_exempt = True
+
     def get(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)

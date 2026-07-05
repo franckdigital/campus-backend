@@ -11,7 +11,7 @@ from django.db.models import Sum, Prefetch
 from .models import (
     FeeType, Invoice, InvoiceItem, PaymentMethod, Payment,
     CashRegister, CashSession, CashTransaction, BankAccount, Expense,
-    FeeConfiguration
+    FeeConfiguration, recalculate_invoices_for_fee_config
 )
 from .serializers import (
     FeeTypeSerializer, InvoiceSerializer, InvoiceListSerializer,
@@ -38,6 +38,8 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, SearchFilter]
     search_fields = ['name', 'code']
     filterset_fields = ['is_active', 'is_online']
+    # Reference data, no student FK — safe to expose before fee is paid.
+    fee_gate_exempt = True
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
@@ -51,6 +53,17 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     search_fields = ['invoice_number', 'student__matricule', 'student__user__first_name']
     ordering_fields = ['issue_date', 'due_date', 'total', 'status']
     filterset_fields = ['student', 'site', 'academic_year', 'status', 'is_active']
+    # A student's own invoices are one of the few things they're allowed to
+    # read before their registration fee is paid (see apps.students.permissions)
+    fee_gate_exempt = True
+
+    def get_queryset(self):
+        qs = self.queryset
+        # A student (paid or not) may only ever see their own invoices —
+        # ?student=<other id> must not leak another student's data.
+        if self.request.user.user_type == 'STUDENT':
+            qs = qs.filter(student__user=self.request.user)
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -187,11 +200,19 @@ class PaymentViewSet(viewsets.ModelViewSet):
     search_fields = ['payment_number', 'reference', 'invoice__invoice_number']
     ordering_fields = ['payment_date', 'amount', 'status']
     filterset_fields = ['invoice', 'payment_method', 'status', 'is_active']
+    # A student's own payment history is allowed before the registration fee
+    # is paid (see apps.students.permissions) — get_queryset below is what
+    # makes that safe (forces scoping to the requesting student).
+    fee_gate_exempt = True
 
     def get_queryset(self):
         qs = Payment.objects.select_related(
             'invoice__student__user', 'payment_method', 'received_by', 'validated_by'
         )
+        if self.request.user.user_type == 'STUDENT':
+            # A student may only ever see their own payments — ignore/override
+            # any ?student= query param rather than trusting it.
+            return qs.filter(invoice__student__user=self.request.user)
         student = self.request.query_params.get('student')
         if student:
             qs = qs.filter(invoice__student_id=student)
@@ -728,4 +749,24 @@ class FeeConfigurationViewSet(viewsets.ModelViewSet):
         if is_active is not None and is_active != '':
             qs = qs.filter(is_active=is_active.lower() in ('true', '1', 'yes'))
 
+        # modality is a plain CharField (not a FK), no collation workaround needed
+        modality = p.get('modality')
+        if modality:
+            qs = qs.filter(modality=modality)
+
         return qs
+
+    def perform_update(self, serializer):
+        old = self.get_object()
+        old_registration_fee = old.registration_fee
+        old_tuition_fee = old.tuition_fee
+        fee_config = serializer.save()
+        self._invoices_recalculated = recalculate_invoices_for_fee_config(
+            fee_config, old_registration_fee, old_tuition_fee
+        )
+
+    def update(self, request, *args, **kwargs):
+        self._invoices_recalculated = 0
+        response = super().update(request, *args, **kwargs)
+        response.data['invoices_updated'] = self._invoices_recalculated
+        return response
