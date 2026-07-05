@@ -80,6 +80,17 @@ class SubjectViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'code']
     filterset_fields = ['is_active']
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # Subject has no site FK (it's a shared catalog across sites) — a
+        # bare ?site= was silently ignored by django-filter, so every site's
+        # dashboard showed the platform-wide subject count instead of just
+        # the subjects actually assigned to a class at that site.
+        site = self.request.query_params.get('site')
+        if site:
+            qs = qs.filter(class_teachers__class_obj__site_id=site).distinct()
+        return qs
+
 
 class TeacherViewSet(viewsets.ModelViewSet):
     queryset = TeacherProfile.objects.select_related('user').all()

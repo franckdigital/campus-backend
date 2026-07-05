@@ -550,6 +550,12 @@ class ReportCardViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if hasattr(user, 'student_profile') and not user.is_staff:
             qs = qs.filter(is_published=True)
+        # ReportCard has no direct site FK — not in filterset_fields, so a
+        # bare ?site= was silently ignored by django-filter and every site's
+        # success-rate KPI leaked every other site's bulletins into its total.
+        site = self.request.query_params.get('site')
+        if site:
+            qs = qs.filter(class_group__site_id=site)
         return qs
 
     @action(detail=False, methods=['post'])

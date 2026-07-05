@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -216,6 +217,14 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_BEAT_SCHEDULE = {
+    # Échéancier de scolarité : rappel étudiant + parents, à partir du 25 du
+    # mois puis tous les 3 jours jusqu'à régularisation (voir apps.finance.tasks)
+    'send-echeancier-reminders': {
+        'task': 'finance.send_echeancier_reminders',
+        'schedule': crontab(hour=8, minute=0),
+    },
+}
 
 # CinetPay Configuration
 CINETPAY_API_KEY = config('CINETPAY_API_KEY', default='')

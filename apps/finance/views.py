@@ -216,6 +216,12 @@ class PaymentViewSet(viewsets.ModelViewSet):
         student = self.request.query_params.get('student')
         if student:
             qs = qs.filter(invoice__student_id=student)
+        # Payment has no direct site FK — not in filterset_fields, so a
+        # bare ?site= was silently ignored by django-filter and every
+        # dashboard leaked every other site's revenue into its own total.
+        site = self.request.query_params.get('site')
+        if site:
+            qs = qs.filter(invoice__site_id=site)
         return qs
 
     def perform_create(self, serializer):

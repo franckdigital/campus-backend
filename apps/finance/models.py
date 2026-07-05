@@ -741,6 +741,27 @@ class FeeInstallment(BaseModel):
         return f"{self.fee_configuration} — {self.label} ({self.amount} FCFA)"
 
 
+def _resolve_fee_config_for_student(student, academic_year=None):
+    """Shared level-resolution used by both compute_tuition_schedule_status
+    and get_student_installment_schedule, so they can never drift apart."""
+    level = None
+    try:
+        from apps.academic.models import Class as AcademicClass
+        enrollment_row = student.enrollments.filter(
+            status='ENROLLED', is_active=True
+        ).order_by('-created_at').values_list('class_obj_id', flat=True).first()
+        if enrollment_row:
+            class_obj = AcademicClass.objects.select_related('level').get(pk=enrollment_row)
+            level = class_obj.level
+    except Exception:
+        pass
+
+    return FeeConfiguration.get_for_enrollment(
+        student.site, level, academic_year,
+        modality=student.modality, affectation_status=student.affectation_status
+    )
+
+
 def compute_tuition_schedule_status(student, academic_year=None):
     """Single source of truth for a student's échéancier compliance — called
     by the elearning permission gate, financial_summary, EnrollmentSerializer
@@ -762,24 +783,7 @@ def compute_tuition_schedule_status(student, academic_year=None):
         'cumulative_paid': 0,
     }
 
-    # Resolve the student's current level (via active enrollment), same
-    # pattern used by financial_summary/prepare_invoices.
-    level = None
-    try:
-        from apps.academic.models import Class as AcademicClass
-        enrollment_row = student.enrollments.filter(
-            status='ENROLLED', is_active=True
-        ).order_by('-created_at').values_list('class_obj_id', flat=True).first()
-        if enrollment_row:
-            class_obj = AcademicClass.objects.select_related('level').get(pk=enrollment_row)
-            level = class_obj.level
-    except Exception:
-        pass
-
-    fee_config = FeeConfiguration.get_for_enrollment(
-        student.site, level, academic_year,
-        modality=student.modality, affectation_status=student.affectation_status
-    )
+    fee_config = _resolve_fee_config_for_student(student, academic_year)
     if not fee_config:
         return result
 
@@ -801,4 +805,66 @@ def compute_tuition_schedule_status(student, academic_year=None):
     result['cumulative_due'] = cumulative_due
     result['cumulative_paid'] = cumulative_paid
     result['is_up_to_date'] = bool(student.echeance_override) or cumulative_paid >= cumulative_due
+    return result
+
+
+def get_student_installment_schedule(student, academic_year=None):
+    """Per-installment breakdown of a student's échéancier — powers the
+    "Échéancier" table in the admin dossier's Paiements tab. Payments aren't
+    tied to a specific tranche (they land against the invoice balance as a
+    whole), so a given tranche's status is derived from whether the running
+    cumulative amount paid covers everything due up to and including it —
+    the same grace-period rule as compute_tuition_schedule_status, just
+    walked one installment at a time instead of collapsed into one flag.
+
+    Returns a dict: has_schedule, total, cumulative_paid, installments (list
+    of {id, label, due_date, amount, cumulative_due, status}), where status
+    is one of PAYE / PARTIEL / EN_RETARD / A_VENIR.
+    """
+    from datetime import timedelta
+    from django.db.models import Sum
+    from django.utils import timezone
+
+    result = {'has_schedule': False, 'total': 0, 'cumulative_paid': 0, 'installments': []}
+
+    fee_config = _resolve_fee_config_for_student(student, academic_year)
+    if not fee_config:
+        return result
+
+    installments = list(fee_config.installments.all())
+    if not installments:
+        return result
+
+    result['has_schedule'] = True
+
+    today = timezone.now().date()
+    grace_cutoff = today - timedelta(days=5)
+
+    cumulative_paid = Invoice.objects.filter(
+        student=student, is_active=True
+    ).exclude(status='CANCELLED').aggregate(s=Sum('amount_paid'))['s'] or 0
+    result['cumulative_paid'] = cumulative_paid
+
+    running_due = 0
+    rows = []
+    for inst in installments:
+        running_due += inst.amount
+        is_overdue = inst.due_date <= grace_cutoff
+        if cumulative_paid >= running_due:
+            row_status = 'PAYE'
+        elif cumulative_paid > running_due - inst.amount:
+            row_status = 'EN_RETARD' if is_overdue else 'PARTIEL'
+        else:
+            row_status = 'EN_RETARD' if is_overdue else 'A_VENIR'
+        rows.append({
+            'id': str(inst.id),
+            'label': inst.label,
+            'due_date': inst.due_date,
+            'amount': inst.amount,
+            'cumulative_due': running_due,
+            'status': row_status,
+        })
+
+    result['total'] = running_due
+    result['installments'] = rows
     return result

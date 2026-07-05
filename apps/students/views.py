@@ -437,6 +437,33 @@ class StudentViewSet(viewsets.ModelViewSet):
             'cumulative_paid':          float(schedule_status['cumulative_paid']),
         })
 
+    @action(detail=True, methods=['get'], url_path='echeancier')
+    def echeancier(self, request, pk=None):
+        """Per-installment breakdown of this student's échéancier de scolarité
+        — powers the schedule table shown in the admin dossier's Paiements tab."""
+        from apps.finance.models import get_student_installment_schedule
+
+        student = self.get_object()
+        self._check_own_student_access(request, student)
+        schedule = get_student_installment_schedule(student)
+
+        return Response({
+            'has_schedule': schedule['has_schedule'],
+            'total': float(schedule['total']),
+            'cumulative_paid': float(schedule['cumulative_paid']),
+            'echeance_override': bool(student.echeance_override),
+            'installments': [
+                {
+                    'id': row['id'],
+                    'label': row['label'],
+                    'due_date': row['due_date'],
+                    'amount': float(row['amount']),
+                    'cumulative_due': float(row['cumulative_due']),
+                    'status': row['status'],
+                }
+                for row in schedule['installments']
+            ],
+        })
 
     @action(detail=True, methods=['post'], url_path='prepare-invoices')
     def prepare_invoices(self, request, pk=None):
