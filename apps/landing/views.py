@@ -37,7 +37,12 @@ class AIAssistantView(APIView):
         question_lower = question.lower()
         answer = None
         for kr in AIKeywordResponse.objects.filter(is_active=True).order_by('priority'):
-            if kr.keyword.lower() in question_lower:
+            # `keyword` can hold several comma-separated alternatives (e.g.
+            # "frais, inscription") — match if ANY of them is a substring of
+            # the question, not the literal comma-joined string as a whole
+            # (which would never appear verbatim in a real question).
+            keywords = [k.strip().lower() for k in kr.keyword.split(',') if k.strip()]
+            if any(k in question_lower for k in keywords):
                 answer = kr.response
                 break
 

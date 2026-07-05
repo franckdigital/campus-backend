@@ -85,18 +85,48 @@ class Invoice(BaseModel):
         return f"{self.invoice_number} - {self.student.matricule}"
 
     def save(self, *args, **kwargs):
-        if not self.invoice_number:
-            self.invoice_number = self.generate_invoice_number()
         self.calculate_totals()
-        super().save(*args, **kwargs)
+        if self.invoice_number:
+            super().save(*args, **kwargs)
+            return
+        # generate_invoice_number() picks the next free number based on what
+        # currently exists — if a concurrent request (or a retry after a
+        # deletion changed the count) grabs the same number first, the
+        # unique constraint on invoice_number raises IntegrityError. Retry a
+        # few times with a freshly recomputed number rather than 500ing.
+        from django.db import IntegrityError
+        attempts = 0
+        while True:
+            self.invoice_number = self.generate_invoice_number()
+            try:
+                super().save(*args, **kwargs)
+                return
+            except IntegrityError:
+                attempts += 1
+                if attempts >= 5:
+                    raise
+                self.invoice_number = ''
 
     def generate_invoice_number(self):
         year = timezone.now().year
         site_code = self.site.code if self.site else 'XX'
-        count = Invoice.objects.filter(
-            invoice_number__startswith=f"INV-{site_code}-{year}"
-        ).count() + 1
-        return f"INV-{site_code}-{year}-{count:05d}"
+        prefix = f"INV-{site_code}-{year}-"
+        # Base the next number on the highest EXISTING suffix, not a row
+        # count — count() collides with an already-issued higher number
+        # once any invoice in this prefix has been deleted (e.g. via a
+        # cleanup script), since the count drops but the gap it left isn't
+        # actually free.
+        last_number = Invoice.objects.filter(
+            invoice_number__startswith=prefix
+        ).order_by('-invoice_number').values_list('invoice_number', flat=True).first()
+        if last_number:
+            try:
+                last_seq = int(last_number.rsplit('-', 1)[-1])
+            except ValueError:
+                last_seq = Invoice.objects.filter(invoice_number__startswith=prefix).count()
+        else:
+            last_seq = 0
+        return f"{prefix}{last_seq + 1:05d}"
 
     def calculate_totals(self):
         from decimal import Decimal, ROUND_HALF_UP

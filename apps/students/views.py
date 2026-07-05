@@ -76,9 +76,12 @@ class StudentViewSet(viewsets.ModelViewSet):
     ordering_fields = ['user__last_name', 'matricule', 'admission_date']
     filterset_fields = ['status', 'is_active', 'site', 'gender']
     # A student whose registration fee is unpaid may still check their own
-    # profile/financial summary (fee-gated on everything else — see
-    # apps.students.permissions.IsRegistrationFeePaidOrExempt).
-    fee_gate_exempt_actions = ('me', 'financial_summary')
+    # profile/financial summary, and MUST be able to call prepare_invoices —
+    # that's the action that generates their very first invoices (including
+    # the registration one), so gating it behind "registration already paid"
+    # would make it impossible to ever pay in the first place. Fee-gated on
+    # everything else — see apps.students.permissions.IsRegistrationFeePaidOrExempt.
+    fee_gate_exempt_actions = ('me', 'financial_summary', 'prepare_invoices', 'echeancier')
 
     def get_queryset(self):
         base = Student.objects.select_related('user', 'site')

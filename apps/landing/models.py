@@ -5,9 +5,11 @@ from apps.core.models import BaseModel
 class AIKeywordResponse(BaseModel):
     """A keyword → canned-response pair for the public vitrine's FAQ chat
     widget. No real LLM involved — the widget matches the visitor's question
-    against `keyword` (substring, case-insensitive) in `priority` order and
-    returns the first match's `response`. A row with keyword='default' is
-    the fallback used when nothing matches."""
+    against `keyword` in `priority` order and returns the first match's
+    `response`. `keyword` may hold several comma-separated alternatives
+    (e.g. "frais, inscription") — the row matches if ANY of them appears as
+    a substring of the question (case-insensitive). A row with
+    keyword='default' is the fallback used when nothing matches."""
     keyword = models.CharField(max_length=100)
     question_example = models.CharField(max_length=255, blank=True)
     response = models.TextField()

@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 from .models import Parent, Student, StudentParent, StudentFile, StudentCard
 from apps.accounts.serializers import UserSerializer, UserCreateSerializer
 
@@ -178,11 +179,19 @@ class StudentSerializer(serializers.ModelSerializer):
 class StudentCreateSerializer(serializers.ModelSerializer):
     user_data = UserCreateSerializer(write_only=True)
     class_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    # Optional — when the client (admin form) already computed a matricule
+    # (manual entry for an affected/former student, or a site-aware generated
+    # one), it's used as-is; left blank, Student.save() falls back to its own
+    # generate_matricule().
+    matricule = serializers.CharField(
+        required=False, allow_blank=True,
+        validators=[UniqueValidator(queryset=Student.objects.all(), message="Ce matricule est déjà utilisé.")]
+    )
 
     class Meta:
         model = Student
         fields = [
-            'user_data', 'gender', 'birth_date', 'birth_place',
+            'user_data', 'matricule', 'gender', 'birth_date', 'birth_place',
             'nationality', 'address', 'city', 'site', 'status', 'modality', 'affectation_status',
             'admission_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
