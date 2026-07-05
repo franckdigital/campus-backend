@@ -361,6 +361,13 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 return DRFResponse({'detail': 'Token invalide ou expire'}, status=401)
         if not user or not getattr(user, 'is_authenticated', False):
             return DRFResponse({'detail': 'Non autorise'}, status=401)
+        # authentication_classes=[] means DRF never populates request.user for
+        # this action — it stays AnonymousUser unless set here. get_queryset()
+        # (used by get_object() below) checks request.user.user_type to scope
+        # a student to their own payments, which crashes (AttributeError on
+        # AnonymousUser) if this isn't set, producing an uncaught 500 outside
+        # the try/except below.
+        request.user = user
 
         payment = self.get_object()
 
