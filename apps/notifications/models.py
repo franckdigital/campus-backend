@@ -210,6 +210,11 @@ class DeviceToken(BaseModel):
     token    = models.CharField(max_length=512)
     platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, default='EXPO')
     is_active = models.BooleanField(default=True)
+    # False once the user explicitly logs out on this device — the token
+    # stays active (still reachable) so a push still arrives, but push.py
+    # sends a generic, content-free message instead of the real one until
+    # the next login flips this back to True (see RegisterDeviceView.post).
+    is_logged_in = models.BooleanField(default=True)
     last_used = models.DateTimeField(auto_now=True)
 
     class Meta:

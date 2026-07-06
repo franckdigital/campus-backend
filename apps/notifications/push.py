@@ -73,18 +73,46 @@ def send_expo_push(tokens, title, body, data=None, sound='default', badge=1, cha
         return 0, []
 
 
+GENERIC_LOGGED_OUT_TITLE = 'Nouvelle notification'
+GENERIC_LOGGED_OUT_BODY = (
+    "Vous avez une nouvelle notification importante. "
+    "Ouvrez l'application et connectez-vous pour la consulter."
+)
+
+
 def get_user_expo_tokens(user):
-    """Return all active Expo push tokens for a user."""
+    """Return (logged_in_tokens, logged_out_tokens) — both are still active
+    (eligible for push), split by whether the user is currently logged out
+    on that device. A logged-out device still gets pinged, just with a
+    content-free message instead of the real one (see push_to_user)."""
     from .models import DeviceToken
-    return list(
-        DeviceToken.objects.filter(user=user, is_active=True, platform='EXPO')
-        .values_list('token', flat=True)
-    )
+    qs = DeviceToken.objects.filter(user=user, is_active=True, platform='EXPO')
+    logged_in = list(qs.filter(is_logged_in=True).values_list('token', flat=True))
+    logged_out = list(qs.filter(is_logged_in=False).values_list('token', flat=True))
+    return logged_in, logged_out
 
 
 def push_to_user(user, title, body, data=None, channel_id=None):
-    """High-level helper: push to all active devices of a user."""
-    tokens = get_user_expo_tokens(user)
-    if tokens:
-        return send_expo_push(tokens, title, body, data=data, channel_id=channel_id)
-    return 0, []
+    """High-level helper: push to all active devices of a user — devices
+    where the user is logged out get a generic, detail-free message instead
+    of the real title/body/data, so nothing sensitive shows on a lock screen
+    for an account nobody is currently signed into on that device."""
+    logged_in_tokens, logged_out_tokens = get_user_expo_tokens(user)
+
+    total_success = 0
+    all_failed = []
+
+    if logged_in_tokens:
+        success, failed = send_expo_push(logged_in_tokens, title, body, data=data, channel_id=channel_id)
+        total_success += success
+        all_failed += failed
+
+    if logged_out_tokens:
+        success, failed = send_expo_push(
+            logged_out_tokens, GENERIC_LOGGED_OUT_TITLE, GENERIC_LOGGED_OUT_BODY,
+            data={}, channel_id=channel_id,
+        )
+        total_success += success
+        all_failed += failed
+
+    return total_success, all_failed

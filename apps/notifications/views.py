@@ -242,7 +242,15 @@ class SendNotificationView(APIView):
 
 
 class RegisterDeviceView(APIView):
-    """Register or refresh a mobile push token for the current user."""
+    """Register or refresh a mobile push token for the current user.
+
+    POST (on login / app start) marks the token fully active AND "logged
+    in" — the user gets real push content again. DELETE (on logout) does
+    NOT deactivate the token: the device stays reachable so push still
+    arrives, but marked "logged out" (is_logged_in=False) so push.py sends
+    a generic, content-free message instead of the real one until the next
+    login on that same device flips it back.
+    """
     def post(self, request):
         token    = (request.data.get('token') or '').strip()
         platform = request.data.get('platform', 'EXPO').upper()
@@ -253,7 +261,7 @@ class RegisterDeviceView(APIView):
         from .models import DeviceToken
         obj, created = DeviceToken.objects.update_or_create(
             user=request.user, token=token,
-            defaults={'platform': platform, 'is_active': True},
+            defaults={'platform': platform, 'is_active': True, 'is_logged_in': True},
         )
         return Response({'detail': 'Token enregistré.', 'created': created})
 
@@ -261,8 +269,8 @@ class RegisterDeviceView(APIView):
         token = (request.data.get('token') or '').strip()
         if token:
             from .models import DeviceToken
-            DeviceToken.objects.filter(user=request.user, token=token).update(is_active=False)
-        return Response({'detail': 'Token désactivé.'})
+            DeviceToken.objects.filter(user=request.user, token=token).update(is_logged_in=False)
+        return Response({'detail': 'Session marquée déconnectée sur cet appareil.'})
 
 
 class NotificationPreferenceViewSet(viewsets.ModelViewSet):
