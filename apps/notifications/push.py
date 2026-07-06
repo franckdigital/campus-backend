@@ -79,6 +79,24 @@ GENERIC_LOGGED_OUT_BODY = (
     "Ouvrez l'application et connectez-vous pour la consulter."
 )
 
+# Per-category generic content for logged-out devices — names the topic so
+# the notification isn't meaningless, but never the sensitive specifics
+# (amount, child's name, etc.) that the real notification.data/title/body
+# would carry. Falls back to the fully generic message above for any
+# category not listed here.
+GENERIC_LOGGED_OUT_BY_CATEGORY = {
+    'echeancier_reminder': (
+        'Échéancier de scolarité',
+        "Une notification concernant l'échéancier de scolarité vous attend. "
+        "Connectez-vous pour la consulter.",
+    ),
+}
+
+
+def _logged_out_content(data):
+    category = (data or {}).get('category')
+    return GENERIC_LOGGED_OUT_BY_CATEGORY.get(category, (GENERIC_LOGGED_OUT_TITLE, GENERIC_LOGGED_OUT_BODY))
+
 
 def get_user_expo_tokens(user):
     """Return (logged_in_tokens, logged_out_tokens) — both are still active
@@ -108,8 +126,9 @@ def push_to_user(user, title, body, data=None, channel_id=None):
         all_failed += failed
 
     if logged_out_tokens:
+        generic_title, generic_body = _logged_out_content(data)
         success, failed = send_expo_push(
-            logged_out_tokens, GENERIC_LOGGED_OUT_TITLE, GENERIC_LOGGED_OUT_BODY,
+            logged_out_tokens, generic_title, generic_body,
             data={}, channel_id=channel_id,
         )
         total_success += success
