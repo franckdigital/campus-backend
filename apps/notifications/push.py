@@ -87,7 +87,7 @@ GENERIC_LOGGED_OUT_BODY = (
 GENERIC_LOGGED_OUT_BY_CATEGORY = {
     'echeancier_reminder': (
         'Échéancier de scolarité',
-        "Une notification concernant l'échéancier de scolarité vous attend. "
+        "Notification scolarité ESCAM — une échéance de scolarité vous attend. "
         "Connectez-vous pour la consulter.",
     ),
 }
