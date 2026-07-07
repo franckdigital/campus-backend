@@ -357,8 +357,20 @@ class CinetPayDemoPayView(APIView):
         except CinetPayTransaction.DoesNotExist:
             return Response({'detail': 'Transaction introuvable'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Sécurité : seul l'étudiant propriétaire peut valider
-        if transaction.invoice.student.user_id != request.user.id:
+        # Sécurité : l'étudiant propriétaire, un parent qui lui est rattaché,
+        # ou un admin/staff peuvent valider — un parent payant depuis l'app
+        # mobile n'est pas l'utilisateur de l'étudiant, donc s'arrêter au seul
+        # user_id du student bloquait à tort tous les paiements faits par un
+        # parent (y compris le repli "Mode test" quand CinetPay est injoignable).
+        user = request.user
+        student = transaction.invoice.student
+        is_owner  = student.user_id == user.id
+        is_staff  = user.user_type in ('ADMIN', 'STAFF')
+        is_parent = False
+        if not (is_owner or is_staff) and user.user_type == 'PARENT':
+            from apps.students.models import StudentParent
+            is_parent = StudentParent.objects.filter(student=student, parent__user=user).exists()
+        if not (is_owner or is_staff or is_parent):
             return Response({'detail': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
 
         if transaction.status == 'SUCCESS':

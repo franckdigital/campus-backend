@@ -165,29 +165,117 @@ class AttendanceReportView(APIView):
 class StudentReportView(APIView):
     def get(self, request):
         site_id = request.query_params.get('site_id')
-        
+
         from apps.students.models import Student
         from apps.academic.models import Enrollment
-        
+
         students = Student.objects.filter(is_active=True)
-        
+
         if site_id:
             students = students.filter(site_id=site_id)
-        
+
         by_status = students.values('status').annotate(count=Count('id'))
         by_gender = students.values('gender').annotate(count=Count('id'))
-        
+
         enrollments = Enrollment.objects.filter(is_active=True)
         if site_id:
             enrollments = enrollments.filter(class_obj__site_id=site_id)
-        
+
         by_class = enrollments.values(
             'class_obj__name', 'class_obj__code'
         ).annotate(count=Count('id'))
-        
+
         return Response({
             'total_students': students.count(),
             'by_status': list(by_status),
             'by_gender': list(by_gender),
             'by_class': list(by_class)
+        })
+
+
+class GradesReportView(APIView):
+    """School-wide success rate / grade distribution, for the admin
+    Statistiques page — mirrors StudentReportView/AttendanceReportView."""
+    def get(self, request):
+        site_id = request.query_params.get('site_id')
+        academic_year_id = request.query_params.get('academic_year')
+        semester_id = request.query_params.get('semester')
+
+        from apps.grades.models import ReportCard
+
+        cards = ReportCard.objects.all()
+
+        if site_id:
+            cards = cards.filter(class_group__site_id=site_id)
+        if academic_year_id:
+            cards = cards.filter(semester__academic_year_id=academic_year_id)
+        if semester_id:
+            cards = cards.filter(semester_id=semester_id)
+
+        by_status = cards.values('status').annotate(count=Count('id'))
+        by_class = cards.values(
+            'class_group__name', 'class_group__code'
+        ).annotate(count=Count('id'), avg_score=Avg('average'))
+
+        total = cards.count()
+        passed = cards.filter(status__in=['PASS', 'HONORS', 'CONDITIONAL']).count()
+        avg_score = cards.aggregate(avg=Avg('average'))['avg'] or 0
+
+        return Response({
+            'total_report_cards': total,
+            'passed': passed,
+            'success_rate': round(passed / total * 100, 1) if total else 0,
+            'average_score': round(float(avg_score), 2),
+            'by_status': list(by_status),
+            'by_class': list(by_class),
+        })
+
+
+class ElearningReportView(APIView):
+    """Platform-wide e-learning stats (all quizzes + all lessons combined),
+    for the admin Statistiques page — mirrors the other apps/reports views."""
+    def get(self, request):
+        site_id = request.query_params.get('site_id')
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
+        from apps.elearning.models import Quiz, QuizAttempt, Lesson, LessonProgress
+
+        quizzes = Quiz.objects.filter(is_active=True)
+        attempts = QuizAttempt.objects.filter(submitted_at__isnull=False)
+        lessons = Lesson.objects.filter(is_active=True)
+        progress = LessonProgress.objects.filter(is_active=True)
+
+        if site_id:
+            quizzes = quizzes.filter(class_obj__site_id=site_id)
+            attempts = attempts.filter(quiz__class_obj__site_id=site_id)
+            lessons = lessons.filter(class_obj__site_id=site_id)
+            progress = progress.filter(lesson__class_obj__site_id=site_id)
+        if start_date:
+            attempts = attempts.filter(submitted_at__date__gte=start_date)
+        if end_date:
+            attempts = attempts.filter(submitted_at__date__lte=end_date)
+
+        total_attempts = attempts.count()
+        passed_attempts = attempts.filter(is_passed=True).count()
+        avg_score = attempts.aggregate(avg=Avg('percent'))['avg'] or 0
+
+        total_lessons = lessons.count()
+        completed_progress = progress.filter(lesson__in=lessons, is_completed=True).count()
+        total_progress = progress.filter(lesson__in=lessons).count()
+
+        return Response({
+            'quizzes': {
+                'total_quizzes': quizzes.count(),
+                'total_attempts': total_attempts,
+                'passed': passed_attempts,
+                'pass_rate': round(passed_attempts / total_attempts * 100, 1) if total_attempts else 0,
+                'average_score': round(float(avg_score), 1),
+            },
+            'lessons': {
+                'total_lessons': total_lessons,
+                'total_progress_records': total_progress,
+                'completed': completed_progress,
+                'completion_rate': round(completed_progress / total_progress * 100, 1) if total_progress else 0,
+            },
         })

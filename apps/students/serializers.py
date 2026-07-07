@@ -242,6 +242,8 @@ class StudentListSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(source='user.phone', read_only=True)
     site_name = serializers.CharField(source='site.name', read_only=True)
     program_name = serializers.SerializerMethodField()
+    tuition_up_to_date = serializers.SerializerMethodField()
+    has_payment_schedule = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
@@ -249,6 +251,7 @@ class StudentListSerializer(serializers.ModelSerializer):
             'id', 'matricule', 'full_name', 'email', 'phone',
             'gender', 'site', 'site_name', 'status', 'modality', 'affectation_status', 'is_active',
             'registration_fee_paid', 'echeance_override', 'program_name',
+            'tuition_up_to_date', 'has_payment_schedule',
         ]
 
     def get_program_name(self, obj):
@@ -263,6 +266,18 @@ class StudentListSerializer(serializers.ModelSerializer):
             prog = enrollment.class_obj.level.program
             return prog.name if prog else None
         return None
+
+    def _schedule_status(self, obj):
+        if not hasattr(obj, '_tuition_schedule_status_cache'):
+            from apps.finance.models import compute_tuition_schedule_status
+            obj._tuition_schedule_status_cache = compute_tuition_schedule_status(obj)
+        return obj._tuition_schedule_status_cache
+
+    def get_tuition_up_to_date(self, obj):
+        return self._schedule_status(obj)['is_up_to_date']
+
+    def get_has_payment_schedule(self, obj):
+        return self._schedule_status(obj)['has_schedule']
 
 
 class StudentDossierSerializer(serializers.ModelSerializer):
