@@ -8,7 +8,7 @@ from rest_framework.filters import OrderingFilter
 from .models import CinetPayConfig, CinetPayTransaction
 from .serializers import (
     CinetPayConfigSerializer, CinetPayTransactionSerializer,
-    CinetPayInitiateSerializer, CinetPayCallbackSerializer
+    CinetPayInitiateSerializer
 )
 from .services import CinetPayService
 from apps.finance.models import Invoice
@@ -196,34 +196,40 @@ class CinetPayInitiateView(APIView):
 
 
 class CinetPayCallbackView(APIView):
+    """Handles CinetPay's notify_url webhook (IPN).
+
+    Per CinetPay's own docs, a webhook can be called by anyone — the status
+    in its payload is only ever used here to identify which transaction to
+    check; process_callback() always re-verifies the canonical status via
+    GET /v1/payment/{merchant_transaction_id} before finalizing anything.
+    We don't know the exact payload shape/field names CinetPay's v1 webhook
+    sends, so we look for either identifier in the body or the query
+    string rather than validating a fixed schema.
+    """
     permission_classes = [permissions.AllowAny]
-    
+
     def post(self, request):
-        serializer = CinetPayCallbackSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        data = serializer.validated_data
-        
-        transaction_id = data.get('cpm_trans_id')
-        try:
-            transaction = CinetPayTransaction.objects.get(transaction_id=transaction_id)
-        except CinetPayTransaction.DoesNotExist:
+        data = {**request.query_params.dict(), **request.data}
+        transaction_id = data.get('merchant_transaction_id') or data.get('transaction_id')
+        if not transaction_id:
+            return Response(
+                {'detail': 'Identifiant de transaction manquant'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        transaction = (
+            CinetPayTransaction.objects.filter(transaction_id=transaction_id).first()
+            or CinetPayTransaction.objects.filter(cinetpay_transaction_id=transaction_id).first()
+        )
+        if not transaction:
             return Response(
                 {'detail': 'Transaction non trouvée'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         service = CinetPayService(transaction.invoice.site)
-        
-        signature = data.get('signature', '')
-        if signature and not service.verify_signature(data, signature):
-            return Response(
-                {'detail': 'Signature invalide'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        result = service.process_callback(data)
-        
+        result = service.process_callback(transaction)
+
         if result['success']:
             return Response({'status': 'success'})
         else:

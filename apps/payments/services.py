@@ -1,40 +1,74 @@
 import requests
-import hashlib
-import hmac
 from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 from .models import CinetPayConfig, CinetPayTransaction
 from apps.finance.models import Payment, PaymentMethod
 
 
 class CinetPayService:
-    """Service for CinetPay API integration."""
-    
-    BASE_URL = getattr(settings, 'CINETPAY_BASE_URL', 'https://api-checkout.cinetpay.net/v2')
-    
+    """Service for the CinetPay v1 ("Aurora") API.
+
+    Auth: POST /v1/oauth/login with {account_key, account_password} returns
+    a bearer access_token (24h TTL) — cached per-config so we don't log in
+    on every single payment call. Everything else is called with
+    `Authorization: Bearer <token>`.
+
+    NOTE: the exact response shape of a *successful* GET /v1/payment/{id}
+    status check hasn't been confirmed against a real sandbox SUCCESS test
+    number yet (only an INSUFFICIENT_BALANCE example was documented) — test
+    against CinetPay's documented sandbox test numbers before fully trusting
+    amount-level reconciliation.
+    """
+
+    BASE_URL = getattr(settings, 'CINETPAY_BASE_URL', 'https://api.cinetpay.net')
+
     def __init__(self, site=None):
+        self._cache_suffix = 'default'
         if site:
             try:
                 config = CinetPayConfig.objects.get(site=site, is_active=True)
-                self.api_key = config.api_key
-                self.site_id = config.cinetpay_site_id
-                self.secret_key = config.secret_key
+                self.account_key = config.account_key
+                self.account_password = config.account_password
                 self.notify_url = config.notify_url
-                self.return_url = config.return_url
-                self.cancel_url = config.cancel_url
+                self.success_url = config.success_url
+                self.failed_url = config.failed_url
+                self._cache_suffix = str(site.id)
             except CinetPayConfig.DoesNotExist:
                 self._use_default_config()
         else:
             self._use_default_config()
-    
+
     def _use_default_config(self):
-        self.api_key = settings.CINETPAY_API_KEY
-        self.site_id = settings.CINETPAY_SITE_ID
-        self.secret_key = settings.CINETPAY_SECRET_KEY
+        self.account_key = settings.CINETPAY_ACCOUNT_KEY
+        self.account_password = settings.CINETPAY_ACCOUNT_PASSWORD
         self.notify_url = settings.CINETPAY_NOTIFY_URL
-        self.return_url = getattr(settings, 'CINETPAY_RETURN_URL', '')
-        self.cancel_url = getattr(settings, 'CINETPAY_CANCEL_URL', '')
-    
+        self.success_url = getattr(settings, 'CINETPAY_SUCCESS_URL', '')
+        self.failed_url = getattr(settings, 'CINETPAY_FAILED_URL', '')
+
+    def _get_access_token(self):
+        """Cached bearer token — POST /v1/oauth/login. Raises RuntimeError
+        with CinetPay's own description on failure (e.g. INVALID_CREDENTIALS)."""
+        cache_key = f'cinetpay_access_token_{self._cache_suffix}'
+        token = cache.get(cache_key)
+        if token:
+            return token
+
+        response = requests.post(
+            f'{self.BASE_URL}/v1/oauth/login',
+            json={'api_key': self.account_key, 'api_password': self.account_password},
+            timeout=30,
+        )
+        data = response.json()
+        if data.get('code') != 200 or not data.get('access_token'):
+            raise RuntimeError(data.get('description') or data.get('status') or 'Authentification CinetPay échouée')
+
+        token = data['access_token']
+        # Refresh a bit before the documented 24h expiry rather than exactly at it.
+        ttl = max(int(data.get('expires_in', 86400)) - 300, 60)
+        cache.set(cache_key, token, ttl)
+        return token
+
     def initiate_payment(self, transaction):
         """Initiate a payment with CinetPay."""
 
@@ -55,89 +89,99 @@ class CinetPayService:
             }
         # ─────────────────────────────────────────────────────────────────
 
-        url = f"{self.BASE_URL}/payment"
+        try:
+            token = self._get_access_token()
+        except (RuntimeError, requests.RequestException) as e:
+            transaction.status = 'FAILED'
+            transaction.status_message = str(e)
+            transaction.save()
+            return {'success': False, 'error': str(e)}
 
+        student_user = transaction.invoice.student.user
         payload = {
-            'apikey': self.api_key,
-            'site_id': self.site_id,
-            'transaction_id': transaction.transaction_id,
-            'amount': int(transaction.amount),
             'currency': transaction.currency,
-            'description': f"Paiement facture {transaction.invoice.invoice_number}",
+            'merchant_transaction_id': transaction.transaction_id,
+            'amount': int(transaction.amount),
+            'lang': 'fr',
+            'designation': f"Paiement facture {transaction.invoice.invoice_number}",
+            'client_email': student_user.email,
+            'client_phone_number': student_user.phone or '',
+            # CinetPay requires 2-255 chars for both — fall back to
+            # placeholders rather than sending an empty/1-char name that
+            # would get rejected outright.
+            'client_first_name': (student_user.first_name or 'Client')[:255] or 'Client',
+            'client_last_name': (student_user.last_name or 'CinetPay')[:255] or 'CinetPay',
+            'direct_pay': False,
+            'success_url': self.success_url or f"{settings.FRONTEND_URL}/payment/success",
+            'failed_url': self.failed_url or f"{settings.FRONTEND_URL}/payment/cancel",
             'notify_url': self.notify_url,
-            'return_url': self.return_url or f"{settings.FRONTEND_URL}/payment/success",
-            'cancel_url': self.cancel_url or f"{settings.FRONTEND_URL}/payment/cancel",
-            'channels': 'ALL',
-            'metadata': str(transaction.invoice.id),
-            'customer_name': transaction.invoice.student.user.full_name,
-            'customer_email': transaction.invoice.student.user.email,
-            'customer_phone_number': transaction.invoice.student.user.phone or '',
         }
 
         try:
-            response = requests.post(url, json=payload, timeout=30)
+            response = requests.post(
+                f'{self.BASE_URL}/v1/payment',
+                json=payload,
+                headers={'Authorization': f'Bearer {token}'},
+                timeout=30,
+            )
             data = response.json()
 
-            if data.get('code') == '201':
-                transaction.payment_url = data['data']['payment_url']
-                transaction.cinetpay_transaction_id = data['data'].get('payment_token', '')
+            if data.get('code') == 200 and data.get('payment_url'):
+                transaction.payment_url = data['payment_url']
+                transaction.cinetpay_transaction_id = data.get('transaction_id', '')
+                transaction.notify_token = data.get('notify_token', '')
                 transaction.save()
                 return {
                     'success': True,
                     'payment_url': transaction.payment_url,
-                    'transaction_id': transaction.transaction_id
+                    'transaction_id': transaction.transaction_id,
                 }
             else:
+                message = (
+                    data.get('description') or data.get('message')
+                    or data.get('status') or 'Erreur lors de l\'initialisation'
+                )
                 transaction.status = 'FAILED'
-                transaction.status_message = data.get('message', 'Erreur inconnue')
+                transaction.status_message = message
                 transaction.save()
-                return {
-                    'success': False,
-                    'error': data.get('message', 'Erreur lors de l\'initialisation')
-                }
+                return {'success': False, 'error': message}
         except requests.RequestException as e:
             transaction.status = 'FAILED'
             transaction.status_message = str(e)
             transaction.save()
-            return {
-                'success': False,
-                'error': str(e)
-            }
-    
+            return {'success': False, 'error': str(e)}
+
     def verify_payment(self, transaction_id):
-        """Verify a payment status with CinetPay."""
-        url = f"{self.BASE_URL}/payment/check"
-        
-        payload = {
-            'apikey': self.api_key,
-            'site_id': self.site_id,
-            'transaction_id': transaction_id,
-        }
-        
+        """Check the canonical payment status — GET /v1/payment/{merchant_transaction_id}.
+        `transaction_id` here is OUR merchant_transaction_id
+        (CinetPayTransaction.transaction_id), the identifier we originally
+        sent CinetPay, not CinetPay's own transaction_id."""
         try:
-            response = requests.post(url, json=payload, timeout=30)
-            data = response.json()
-            return data
+            token = self._get_access_token()
+        except (RuntimeError, requests.RequestException) as e:
+            return {'error': str(e)}
+
+        try:
+            response = requests.get(
+                f'{self.BASE_URL}/v1/payment/{transaction_id}',
+                headers={'Authorization': f'Bearer {token}'},
+                timeout=30,
+            )
+            return response.json()
         except requests.RequestException as e:
             return {'error': str(e)}
-    
-    def verify_signature(self, data, signature):
-        """Verify CinetPay callback signature."""
-        to_sign = f"{self.site_id}{data.get('cpm_trans_id', '')}{data.get('cpm_trans_date', '')}{data.get('cpm_amount', '')}{self.secret_key}"
-        computed_signature = hashlib.sha256(to_sign.encode()).hexdigest()
-        return hmac.compare_digest(computed_signature, signature)
 
     @staticmethod
     def finalize_success_payment(transaction, payment_method_code, payment_method_name, reference, notes):
         """Create the Payment and mark the transaction SUCCESS.
 
-        Shared by the webhook callback, the sandbox test flow, the demo
-        fallback, and status-check reconciliation, so they can't drift out of
-        sync with each other. Does NOT call invoice.add_payment(): the
-        Payment post_save signal (apps.finance.signals.on_payment_save)
-        already recomputes invoice.amount_paid from the sum of all SUCCESS
-        payments on the invoice — calling add_payment() here on top of that
-        double-counts every single Mobile Money payment.
+        Shared by the sandbox test flow, the demo fallback, and status-check
+        reconciliation, so they can't drift out of sync with each other.
+        Does NOT call invoice.add_payment(): the Payment post_save signal
+        (apps.finance.signals.on_payment_save) already recomputes
+        invoice.amount_paid from the sum of all SUCCESS payments on the
+        invoice — calling add_payment() here on top of that double-counts
+        every single Mobile Money payment.
         """
         method, _ = PaymentMethod.objects.get_or_create(
             code=payment_method_code,
@@ -159,37 +203,21 @@ class CinetPayService:
         return payment
 
     def reconcile_from_verification(self, transaction, verification):
-        """If CinetPay's own /payment/check confirms success but our local
-        transaction is still pending — e.g. the IPN webhook never reached us,
-        got dropped, or was retried past our window — finalize it here. Same
-        end effect as process_callback(), just triggered by polling
-        (CinetPayStatusView / check_status) instead of the webhook, so a
-        payment CinetPay actually captured doesn't sit invisible forever.
+        """If CinetPay's own status check confirms success but our local
+        transaction is still pending — e.g. the notify_url webhook never
+        reached us, got dropped, or was retried past our window — finalize
+        it here. Same end effect as process_callback(), just triggered by
+        polling (CinetPayStatusView / check_status) instead of the webhook.
 
-        NOTE: this checks CinetPay's *v2 check API* response shape
-        ({"code": "00", "data": {"status": "ACCEPTED", "amount": ...}}), which
-        uses different field names than the webhook's cpm_* payload. Verify
-        this against a real CinetPay test transaction before fully trusting
-        it in production — adjust the field names below if they don't match.
+        Only trusts `status == 'SUCCESS'` (one of the documented values:
+        SUCCESS/FAILED/INITIATED/PENDING/INSUFFICIENT_BALANCE) — no
+        amount-match guard here yet, since the exact field name for the
+        paid amount on a SUCCESS response isn't confirmed from the docs.
         """
         if transaction.status == 'SUCCESS' or not isinstance(verification, dict):
             return transaction
 
-        payload = verification.get('data') or {}
-        is_success = (
-            verification.get('code') == '00'
-            and str(payload.get('status', '')).upper() == 'ACCEPTED'
-        )
-        if not is_success:
-            return transaction
-
-        try:
-            verified_amount = int(float(payload.get('amount', transaction.amount)))
-        except (TypeError, ValueError):
-            verified_amount = None
-
-        if verified_amount is not None and verified_amount != int(transaction.amount):
-            # Amount mismatch — don't auto-trust it, leave for manual review.
+        if verification.get('status') != 'SUCCESS':
             return transaction
 
         self.finalize_success_payment(
@@ -201,35 +229,33 @@ class CinetPayService:
         )
         return transaction
 
-    def process_callback(self, data):
-        """Process CinetPay callback."""
-        transaction_id = data.get('cpm_trans_id')
+    def process_callback(self, transaction):
+        """Process CinetPay's notify_url webhook (IPN) for an already
+        identified transaction.
 
-        try:
-            transaction = CinetPayTransaction.objects.get(transaction_id=transaction_id)
-        except CinetPayTransaction.DoesNotExist:
-            return {'success': False, 'error': 'Transaction not found'}
+        CinetPay's own documentation explicitly warns: a webhook can be
+        called by anyone, so the status inside its payload must NEVER be
+        trusted at face value. We only use the webhook to learn that
+        *something* happened for this transaction, then always re-fetch the
+        canonical status via GET /v1/payment/{merchant_transaction_id}
+        before finalizing anything.
+        """
+        verification = self.verify_payment(transaction.transaction_id)
+        self.reconcile_from_verification(transaction, verification)
+        transaction.refresh_from_db()
 
-        transaction.callback_data = data
-
-        cpm_result = data.get('cpm_result', '')
-        cpm_amount = data.get('cpm_amount', 0)
-
-        if cpm_result == '00' and int(cpm_amount) == int(transaction.amount):
-            transaction.payment_method = data.get('payment_method', '')
-            transaction.operator_id = data.get('operator_id', '')
-            transaction.save(update_fields=['callback_data', 'payment_method', 'operator_id'])
-
-            self.finalize_success_payment(
-                transaction,
-                payment_method_code='CINETPAY',
-                payment_method_name='CinetPay Mobile Money',
-                reference=transaction.transaction_id,
-                notes=f"Paiement CinetPay - {data.get('payment_method', 'Mobile Money')}",
-            )
+        if transaction.status == 'SUCCESS':
             return {'success': True, 'transaction': transaction}
-        else:
+
+        if isinstance(verification, dict) and verification.get('status') == 'FAILED' and transaction.status != 'FAILED':
             transaction.status = 'FAILED'
-            transaction.status_message = data.get('cpm_error_message', 'Payment failed')
-            transaction.save()
-            return {'success': False, 'error': transaction.status_message}
+            transaction.status_message = (
+                verification.get('message') or verification.get('description') or 'Paiement échoué'
+            )
+            transaction.save(update_fields=['status', 'status_message', 'updated_at'])
+
+        return {
+            'success': False,
+            'transaction': transaction,
+            'error': transaction.status_message or 'Paiement non confirmé',
+        }

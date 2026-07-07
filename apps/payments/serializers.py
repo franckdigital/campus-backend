@@ -8,14 +8,14 @@ class CinetPayConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = CinetPayConfig
         fields = [
-            'id', 'site', 'site_name', 'api_key', 'site_id', 'secret_key',
-            'notify_url', 'return_url', 'cancel_url', 'is_sandbox',
+            'id', 'site', 'site_name', 'account_key', 'account_password',
+            'notify_url', 'success_url', 'failed_url', 'is_sandbox',
             'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
         extra_kwargs = {
-            'api_key': {'write_only': True},
-            'secret_key': {'write_only': True},
+            'account_key': {'write_only': True},
+            'account_password': {'write_only': True},
         }
 
 
@@ -51,14 +51,3 @@ class CinetPayInitiateSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 
-class CinetPayCallbackSerializer(serializers.Serializer):
-    cpm_trans_id = serializers.CharField()
-    cpm_site_id = serializers.CharField()
-    cpm_trans_date = serializers.CharField()
-    cpm_amount = serializers.CharField()
-    cpm_currency = serializers.CharField()
-    cpm_result = serializers.CharField()
-    cpm_error_message = serializers.CharField(required=False, allow_blank=True)
-    payment_method = serializers.CharField(required=False, allow_blank=True)
-    operator_id = serializers.CharField(required=False, allow_blank=True)
-    signature = serializers.CharField(required=False, allow_blank=True)

@@ -226,12 +226,14 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# CinetPay Configuration
-CINETPAY_API_KEY = config('CINETPAY_API_KEY', default='')
-CINETPAY_SITE_ID = config('CINETPAY_SITE_ID', default='')
-CINETPAY_SECRET_KEY = config('CINETPAY_SECRET_KEY', default='')
+# CinetPay Configuration — API v1 "Aurora" (account_key/account_password
+# exchanged for a bearer token via /v1/oauth/login, see apps.payments.services)
+CINETPAY_ACCOUNT_KEY = config('CINETPAY_ACCOUNT_KEY', default='')
+CINETPAY_ACCOUNT_PASSWORD = config('CINETPAY_ACCOUNT_PASSWORD', default='')
 CINETPAY_NOTIFY_URL = config('CINETPAY_NOTIFY_URL', default='')
-CINETPAY_BASE_URL = config('CINETPAY_BASE_URL', default='https://api-checkout.cinetpay.net/v2')
+CINETPAY_SUCCESS_URL = config('CINETPAY_SUCCESS_URL', default='')
+CINETPAY_FAILED_URL = config('CINETPAY_FAILED_URL', default='')
+CINETPAY_BASE_URL = config('CINETPAY_BASE_URL', default='https://api.cinetpay.net')
 CINETPAY_LOCAL_SANDBOX = config('CINETPAY_LOCAL_SANDBOX', default=False, cast=bool)
 
 # Zoom Configuration

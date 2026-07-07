@@ -6,18 +6,25 @@ import uuid
 
 
 class CinetPayConfig(BaseModel):
-    """CinetPay configuration per site."""
+    """CinetPay configuration per site — API v1 "Aurora".
+
+    An account is tied to a single country/currency ("un compte = un pays"
+    per CinetPay's docs), authenticated via account_key/account_password
+    exchanged for a short-lived bearer token (see CinetPayService), not the
+    old apikey+site_id+secret_key scheme. cinetpay_site_id is kept only so
+    existing rows don't need a destructive column drop; it's unused by v1.
+    """
     site = models.OneToOneField(
         Site,
         on_delete=models.CASCADE,
         related_name='cinetpay_config'
     )
-    api_key = models.CharField(max_length=255)
-    cinetpay_site_id = models.CharField(max_length=100)
-    secret_key = models.CharField(max_length=255)
+    account_key = models.CharField(max_length=255)
+    cinetpay_site_id = models.CharField(max_length=100, blank=True)
+    account_password = models.CharField(max_length=255)
     notify_url = models.URLField()
-    return_url = models.URLField(blank=True)
-    cancel_url = models.URLField(blank=True)
+    success_url = models.URLField(blank=True)
+    failed_url = models.URLField(blank=True)
     is_sandbox = models.BooleanField(default=True)
 
     class Meta:
@@ -56,6 +63,11 @@ class CinetPayTransaction(BaseModel):
     currency = models.CharField(max_length=10, default='XOF')
     
     cinetpay_transaction_id = models.CharField(max_length=100, blank=True)
+    # Returned alongside payment_url on initiation — compared against the
+    # notify_url webhook payload as a defensive check before we even bother
+    # re-verifying (CinetPay's own docs warn the webhook can be called by
+    # anyone, so this is a bonus check, not a substitute for re-verification).
+    notify_token = models.CharField(max_length=100, blank=True)
     payment_url = models.URLField(blank=True)
     payment_method = models.CharField(max_length=50, blank=True)
     operator_id = models.CharField(max_length=100, blank=True)
