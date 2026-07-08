@@ -251,6 +251,11 @@ class RegisterDeviceView(APIView):
     a generic, content-free message instead of the real one until the next
     login on that same device flips it back.
     """
+    # An unpaid student is exactly who échéancier reminders target — the fee
+    # gate must not block them from registering the device that receives
+    # those reminders in the first place.
+    fee_gate_exempt = True
+
     def post(self, request):
         token    = (request.data.get('token') or '').strip()
         platform = request.data.get('platform', 'EXPO').upper()
