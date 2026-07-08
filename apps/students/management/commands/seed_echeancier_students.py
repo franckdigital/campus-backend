@@ -93,7 +93,7 @@ class Command(BaseCommand):
             )
             juin, juin_created = FeeInstallment.objects.get_or_create(
                 fee_configuration=fee_config, label='Juin',
-                defaults={'due_date': datetime.date(2026, 6, 25), 'amount': 150000, 'order': 1},
+                defaults={'due_date': datetime.date(2026, 6, 25), 'amount': 100000, 'order': 1},
             )
             self.stdout.write(
                 f'  Echeance Mai: {mai.amount} FCFA / {mai.due_date} ({"creee" if mai_created else "existe"})'
