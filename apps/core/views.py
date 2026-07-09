@@ -35,10 +35,21 @@ class SiteViewSet(viewsets.ModelViewSet):
         return SiteSerializer
 
     def perform_destroy(self, instance):
+        from django.db.models import ProtectedError
+        from rest_framework.exceptions import ValidationError
+
         if instance.is_main:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError("Le site principal ne peut pas être supprimé.")
-        instance.delete()
+        try:
+            instance.delete()
+        except ProtectedError as e:
+            # Student/Program/Invoice/Document all PROTECT their `site` FK —
+            # a raw ProtectedError would otherwise surface as an opaque 500
+            # instead of telling the admin what's actually still attached.
+            blockers = sorted({obj._meta.verbose_name for obj in e.protected_objects})
+            raise ValidationError(
+                f"Impossible de supprimer ce site : des données y sont encore rattachées ({', '.join(blockers)})."
+            )
 
 
 class AcademicYearViewSet(viewsets.ModelViewSet):
