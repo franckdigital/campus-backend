@@ -154,10 +154,21 @@ class CinetPayService:
                     'transaction_id': transaction.transaction_id,
                 }
             else:
-                message = (
-                    data.get('description') or data.get('message')
-                    or data.get('status') or 'Erreur lors de l\'initialisation'
-                )
+                # v1 "Aurora" wraps the REAL outcome in details — the
+                # top-level code/status only mean "the request was well
+                # formed", not "the payment succeeded". details.errors (a
+                # dict of field -> reason, e.g. client_phone_number) is the
+                # actual cause and was silently dropped before this fix.
+                details = data.get('details') or {}
+                errors = details.get('errors')
+                if errors:
+                    message = '; '.join(f'{k}: {v}' for k, v in errors.items())
+                else:
+                    message = (
+                        details.get('message') or data.get('description')
+                        or data.get('message') or data.get('status')
+                        or 'Erreur lors de l\'initialisation'
+                    )
                 transaction.status = 'FAILED'
                 transaction.status_message = message
                 transaction.save()
