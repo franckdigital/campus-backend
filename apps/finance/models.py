@@ -291,11 +291,23 @@ class Payment(BaseModel):
         raise last_error
 
     def generate_payment_number(self):
+        # Based on the highest existing sequence number, not a row count —
+        # a count desyncs from reality the moment any row in the middle of
+        # the sequence is deleted (e.g. a test-data cleanup), and then keeps
+        # recomputing the same already-taken number forever, no matter how
+        # many times save() retries.
         year = timezone.now().year
-        count = Payment.objects.filter(
-            payment_number__startswith=f"PAY-{year}"
-        ).count() + 1
-        return f"PAY-{year}-{count:06d}"
+        prefix = f"PAY-{year}-"
+        last_number = Payment.objects.filter(
+            payment_number__startswith=prefix
+        ).order_by('-payment_number').values_list('payment_number', flat=True).first()
+        last_seq = 0
+        if last_number:
+            try:
+                last_seq = int(last_number[len(prefix):])
+            except ValueError:
+                last_seq = Payment.objects.filter(payment_number__startswith=prefix).count()
+        return f"{prefix}{last_seq + 1:06d}"
 
     def validate(self, user):
         if self.status == 'PENDING':
