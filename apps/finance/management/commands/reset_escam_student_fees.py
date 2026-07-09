@@ -48,10 +48,13 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.MIGRATE_HEADING(f'\n=== {students.count()} etudiant(s) @escam-test.ci ===\n'))
 
+        from apps.payments.models import CinetPayTransaction
+
         plan = []
         for student in students:
             existing_invoices = Invoice.objects.filter(student=student)
             existing_payments = Payment.objects.filter(invoice__student=student)
+            existing_transactions = CinetPayTransaction.objects.filter(invoice__student=student)
 
             inscr_config = FeeConfiguration.objects.filter(
                 site=student.site, program=student.enrollments.filter(is_active=True).values_list('class_obj__level__program', flat=True).first(),
@@ -64,7 +67,10 @@ class Command(BaseCommand):
             scol_amount = scol_config.amount if scol_config else 500000
 
             self.stdout.write(f'\n  -- {student.user.full_name} ({student.user.email}) --')
-            self.stdout.write(f'     Factures existantes a supprimer: {existing_invoices.count()} (paiements: {existing_payments.count()})')
+            self.stdout.write(
+                f'     Factures existantes a supprimer: {existing_invoices.count()} '
+                f'(paiements: {existing_payments.count()}, transactions CinetPay: {existing_transactions.count()})'
+            )
             self.stdout.write(f'     Nouvelle facture Inscription: {inscr_amount} FCFA (0 paye)')
             self.stdout.write(f'     Nouvelle facture Scolarite: {scol_amount} FCFA (0 paye)')
 
@@ -76,6 +82,12 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             for student, inscr_amount, scol_amount in plan:
+                from apps.payments.models import CinetPayTransaction
+                # CinetPayTransaction.invoice is on_delete=PROTECT — tonight's
+                # extensive CinetPay debugging left dozens of test
+                # transactions attached to these invoices, which blocks a
+                # plain Invoice.delete() outright.
+                CinetPayTransaction.objects.filter(invoice__student=student).delete()
                 Payment.objects.filter(invoice__student=student).delete()
                 InvoiceItem.objects.filter(invoice__student=student).delete()
                 Invoice.objects.filter(student=student).delete()
