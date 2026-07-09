@@ -138,6 +138,12 @@ class CinetPayInitiateView(APIView):
                 'currency': transaction.currency
             }, status=status.HTTP_201_CREATED)
         else:
+            logger.warning(
+                'CinetPayInitiate 400 (echec appel CinetPay): user=%s invoice=%s amount=%s '
+                'transaction=%s error=%s',
+                request.user, invoice.invoice_number, amount,
+                transaction.transaction_id, result['error'],
+            )
             # Include transaction_id so the mobile can use demo-pay even when DNS fails
             return Response(
                 {'detail': result['error'], 'transaction_id': transaction.transaction_id},
@@ -345,6 +351,11 @@ class CinetPaySandboxSuccessView(APIView):
   .amount{{color:#059669;font-size:28px;font-weight:800;margin:16px 0;}}
   .badge{{display:inline-block;background:#D1FAE5;color:#065F46;
            border-radius:20px;padding:4px 14px;font-size:12px;font-weight:700;}}
+  .back-btn{{display:inline-flex;align-items:center;justify-content:center;gap:8px;
+             margin-top:24px;width:100%;padding:14px 20px;border:none;border-radius:12px;
+             background:#059669;color:#fff;font-size:15px;font-weight:700;cursor:pointer;}}
+  .back-btn:active{{background:#047857;}}
+  .hint{{margin-top:12px;font-size:12px;color:#9CA3AF;}}
 </style>
 </head>
 <body>
@@ -354,9 +365,10 @@ class CinetPaySandboxSuccessView(APIView):
   <p>{student.first_name} {student.last_name}</p>
   <div class="amount">{int(transaction.amount):,} F CFA</div>
   <div class="badge">SANDBOX — Test uniquement</div>
-  <p style="margin-top:20px;font-size:12px;color:#9CA3AF;">
-    Fermez cette fenêtre pour retourner à l'application.
-  </p>
+  <button class="back-btn" onclick="window.close(); window.history.back();">
+    ← Retour à l'application
+  </button>
+  <p class="hint">Si rien ne se passe, fermez simplement cette fenêtre.</p>
 </div>
 </body>
 </html>"""
