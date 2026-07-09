@@ -1,19 +1,46 @@
 """
-Seed 2 test students (+ their linked parent) enrolled at ESCAM Cocody,
+Seed test students (+ their linked parent) enrolled at ESCAM Cocody,
 partially paid on both inscription and scolarité, with an échéancier
 (Mai + Juin tranches) configured on their barème — for testing the
 tuition reminder task (apps.finance.tasks.send_echeancier_reminders).
 
+With no arguments: seeds the 2 original test students (Fatou Bamba,
+Ibrahim Coulibaly) — safe to re-run, existing rows are left untouched
+(get_or_create). Pass --email to add ONE additional student instead,
+without touching the other two.
+
 Usage:
     python manage.py seed_echeancier_students
+
+    python manage.py seed_echeancier_students \\
+        --email awa.diabate@escam-test.ci --first-name Awa --last-name Diabate \\
+        --phone "+225 01 23 45 67" --gender F \\
+        --inscr-paid 50000 --scol-paid 100000 \\
+        --parent-email mariam.diabate@escam-test.ci --parent-first Mariam --parent-last Diabate \\
+        --parent-relation MOTHER
 """
 import datetime
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 
 class Command(BaseCommand):
     help = 'Seed ESCAM Cocody test students/parents with a partial-payment échéancier'
+
+    def add_arguments(self, parser):
+        parser.add_argument('--email', help='Add one new student instead of the 2 defaults')
+        parser.add_argument('--first-name')
+        parser.add_argument('--last-name')
+        parser.add_argument('--phone', default='+225 01 00 00 00')
+        parser.add_argument('--gender', default='M', choices=['M', 'F'])
+        parser.add_argument('--birth-date', default='2004-01-01', help='YYYY-MM-DD')
+        parser.add_argument('--birth-place', default='Abidjan')
+        parser.add_argument('--inscr-paid', type=int, default=50000)
+        parser.add_argument('--scol-paid', type=int, default=100000)
+        parser.add_argument('--parent-email', required=False)
+        parser.add_argument('--parent-first')
+        parser.add_argument('--parent-last')
+        parser.add_argument('--parent-relation', default='MOTHER', choices=['MOTHER', 'FATHER', 'GUARDIAN'])
 
     def handle(self, *args, **options):
         from apps.accounts.models import User
@@ -119,7 +146,7 @@ class Command(BaseCommand):
             students_data = [
                 {
                     'email': 'fatou.bamba@escam-test.ci', 'first_name': 'Fatou', 'last_name': 'Bamba',
-                    'phone': '+225 07 12 34 56', 'gender': 'F',
+                    'phone': '+225 07 12 34 56 78', 'gender': 'F',
                     'birth_date': datetime.date(2004, 2, 10), 'birth_place': 'Abidjan',
                     'inscr_paid': 50000, 'scol_paid': 100000,
                     'parent_email': 'aya.bamba@escam-test.ci', 'parent_first': 'Aya', 'parent_last': 'Bamba',
@@ -127,13 +154,28 @@ class Command(BaseCommand):
                 },
                 {
                     'email': 'ibrahim.coulibaly@escam-test.ci', 'first_name': 'Ibrahim', 'last_name': 'Coulibaly',
-                    'phone': '+225 05 98 76 54', 'gender': 'M',
+                    'phone': '+225 05 98 76 54 32', 'gender': 'M',
                     'birth_date': datetime.date(2003, 11, 3), 'birth_place': 'Bouake',
                     'inscr_paid': 75000, 'scol_paid': 150000,
                     'parent_email': 'salif.coulibaly@escam-test.ci', 'parent_first': 'Salif', 'parent_last': 'Coulibaly',
                     'parent_relation': 'FATHER',
                 },
             ]
+
+            if options.get('email'):
+                if not options.get('first_name') or not options.get('last_name'):
+                    raise CommandError('--first-name et --last-name sont requis avec --email.')
+                if not options.get('parent_email') or not options.get('parent_first') or not options.get('parent_last'):
+                    raise CommandError('--parent-email, --parent-first et --parent-last sont requis avec --email.')
+                students_data = [{
+                    'email': options['email'], 'first_name': options['first_name'], 'last_name': options['last_name'],
+                    'phone': options['phone'], 'gender': options['gender'],
+                    'birth_date': datetime.datetime.strptime(options['birth_date'], '%Y-%m-%d').date(),
+                    'birth_place': options['birth_place'],
+                    'inscr_paid': options['inscr_paid'], 'scol_paid': options['scol_paid'],
+                    'parent_email': options['parent_email'], 'parent_first': options['parent_first'],
+                    'parent_last': options['parent_last'], 'parent_relation': options['parent_relation'],
+                }]
 
             for data in students_data:
                 self.stdout.write(f"\n  -- Etudiant: {data['first_name']} {data['last_name']} --")

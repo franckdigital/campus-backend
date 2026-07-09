@@ -1,9 +1,26 @@
+import re
+
 import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 from .models import CinetPayConfig, CinetPayTransaction
 from apps.finance.models import Payment, PaymentMethod
+
+
+def _normalize_ci_phone(phone):
+    """Strip formatting (spaces, +, country code) down to CinetPay's expected
+    local format: a bare 10-digit number starting with 0 (Côte d'Ivoire moved
+    to 10-digit mobile numbers in 2021 — 8-digit legacy-format numbers, or
+    numbers with spaces/the +225 prefix left in, get rejected by CinetPay
+    with "client phone number is not mobile" even though they display fine
+    everywhere else in the app)."""
+    digits = re.sub(r'\D', '', phone or '')
+    if digits.startswith('225') and len(digits) > 10:
+        digits = digits[3:]
+    if digits and not digits.startswith('0'):
+        digits = '0' + digits
+    return digits
 
 
 class CinetPayService:
@@ -105,7 +122,7 @@ class CinetPayService:
             'lang': 'fr',
             'designation': f"Paiement facture {transaction.invoice.invoice_number}",
             'client_email': student_user.email,
-            'client_phone_number': student_user.phone or '',
+            'client_phone_number': _normalize_ci_phone(student_user.phone),
             # CinetPay requires 2-255 chars for both — fall back to
             # placeholders rather than sending an empty/1-char name that
             # would get rejected outright.
