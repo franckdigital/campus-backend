@@ -10,6 +10,13 @@ Usage:
     python manage.py test_echeancier_reminders                    # defaults to 2026-06-25
     python manage.py test_echeancier_reminders --date 2026-05-25
     python manage.py test_echeancier_reminders --email fatou.bamba@escam-test.ci
+
+    # Re-send right away instead of waiting out the real 3-day throttle
+    # (_maybe_remind_student skips a student who already got a reminder less
+    # than REMINDER_INTERVAL_DAYS ago) — deletes that student's + their
+    # parents' previous echeancier_reminder Notification rows first, so the
+    # cycle looks brand new to the task. Test-only, never do this in prod.
+    python manage.py test_echeancier_reminders --email fatou.bamba@escam-test.ci --force
 """
 import datetime
 from unittest.mock import patch
@@ -24,11 +31,16 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--date', default='2026-06-25', help='Date simulee (YYYY-MM-DD)')
         parser.add_argument('--email', default=None, help="Ne tester qu'un seul etudiant (email)")
+        parser.add_argument(
+            '--force', action='store_true',
+            help="Supprime les rappels echeancier precedents du/des etudiant(s) cible(s) "
+                 "avant de tester, pour contourner le throttle de 3 jours."
+        )
 
     def handle(self, *args, **options):
         from apps.students.models import Student, StudentParent
         from apps.finance.models import compute_tuition_schedule_status, get_student_installment_schedule
-        from apps.finance.tasks import _maybe_remind_student
+        from apps.finance.tasks import _maybe_remind_student, REMINDER_CATEGORY
         from apps.notifications.models import Notification
 
         sim_date = datetime.datetime.strptime(options['date'], '%Y-%m-%d').date()
@@ -50,6 +62,17 @@ class Command(BaseCommand):
         parent_emails = list(
             StudentParent.objects.filter(student__in=students).values_list('parent__user__email', flat=True)
         )
+
+        if options['force']:
+            student_emails_for_wipe = list(students.values_list('user__email', flat=True))
+            deleted, _ = Notification.objects.filter(
+                recipient__email__in=student_emails_for_wipe + parent_emails,
+                notification_type='REMINDER',
+                data__category=REMINDER_CATEGORY,
+            ).delete()
+            self.stdout.write(self.style.WARNING(
+                f'--force: {deleted} ancien(s) rappel(s) supprime(s) pour contourner le throttle de 3 jours.'
+            ))
 
         total_sent = 0
         with patch('django.utils.timezone.now', return_value=fake_now):

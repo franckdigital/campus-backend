@@ -152,6 +152,25 @@ def _send_whatsapp(notification, log, number):
 # Main dispatcher
 # ──────────────────────────────────────────────────────────────
 
+# Must match the Android channel ids registered client-side in
+# campus-mobile/src/hooks/usePushNotifications.js (ANDROID_CHANNELS) — all
+# three are HIGH/MAX importance there. Omitting channelId on the Expo push
+# makes Expo fall back to its own implicit "default" channel (DEFAULT
+# importance), which never shows as a heads-up banner on a locked screen —
+# the notification still arrives, just silently, only visible once the
+# phone is unlocked and the shade is opened.
+_ANDROID_CHANNEL_BY_TYPE = {
+    'PAYMENT': 'payments',
+    'REMINDER': 'payments',
+    'ATTENDANCE': 'attendance',
+    'ABSENCE': 'attendance',
+}
+
+
+def _android_channel_for(notification):
+    return _ANDROID_CHANNEL_BY_TYPE.get(notification.notification_type, 'default')
+
+
 def dispatch_notification(notification, channels=None, force_channels=None):
     """
     Send a notification on all requested channels.
@@ -211,6 +230,7 @@ def dispatch_notification(notification, channels=None, force_channels=None):
                 notification.title,
                 notification.message,
                 data=notification.data,
+                channel_id=_android_channel_for(notification),
             )
             if success > 0:
                 log.mark_sent()
