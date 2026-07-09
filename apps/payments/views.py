@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -6,6 +8,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter
 
 from .models import CinetPayConfig, CinetPayTransaction
+
+logger = logging.getLogger(__name__)
 from .serializers import (
     CinetPayConfigSerializer, CinetPayTransactionSerializer,
     CinetPayInitiateSerializer
@@ -59,13 +63,22 @@ class CinetPayInitiateView(APIView):
 
     def post(self, request):
         serializer = CinetPayInitiateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.warning(
+                'CinetPayInitiate 400 (validation): user=%s errors=%s payload=%s',
+                request.user, serializer.errors, request.data,
+            )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
         invoice_id = data.get('invoice_id')
         student_id = data.get('student_id')
 
         if not invoice_id and not student_id:
+            logger.warning(
+                'CinetPayInitiate 400 (invoice_id/student_id manquants): user=%s payload=%s',
+                request.user, request.data,
+            )
             return Response(
                 {'detail': 'invoice_id ou student_id requis'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -81,6 +94,10 @@ class CinetPayInitiateView(APIView):
                 )
 
             if invoice.status in ['PAID', 'CANCELLED']:
+                logger.warning(
+                    'CinetPayInitiate 400 (facture non payable): user=%s invoice=%s status=%s',
+                    request.user, invoice.invoice_number, invoice.status,
+                )
                 return Response(
                     {'detail': 'Cette facture ne peut pas être payée'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -88,6 +105,10 @@ class CinetPayInitiateView(APIView):
 
             amount = data.get('amount', invoice.balance)
             if amount <= 0:
+                logger.warning(
+                    'CinetPayInitiate 400 (montant <= 0): user=%s invoice=%s amount=%s balance=%s',
+                    request.user, invoice.invoice_number, amount, invoice.balance,
+                )
                 return Response(
                     {'detail': 'Le montant doit être supérieur à 0'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -135,6 +156,11 @@ class CinetPayInitiateView(APIView):
 
         amount = data.get('amount')
         if not amount or amount <= 0:
+            logger.warning(
+                'CinetPayInitiate 400 (montant manquant, creation facture a la volee): '
+                'user=%s student_id=%s payload=%s',
+                request.user, student_id, request.data,
+            )
             return None, Response(
                 {'detail': 'Le montant est requis et doit être supérieur à 0'},
                 status=status.HTTP_400_BAD_REQUEST
