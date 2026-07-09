@@ -1,15 +1,22 @@
 """
-Simulate a given date and run the échéancier reminder logic against the
-ESCAM test students (see seed_echeancier_students), then print what was
-actually sent to the student and their parent — safe to run against any
-database since it never loops over real students, only the @escam-test.ci
-ones created by the seed command.
+Simulate a given date and run the échéancier reminder logic, then print what
+was actually sent to the student and their parent.
+
+With no --email: only loops over the @escam-test.ci test students (see
+seed_echeancier_students) — safe to run against any database, never touches
+real students. Pass --email to target ONE specific student directly instead,
+by any email — including a real, newly-enrolled student. This sends a REAL
+notification (push + in-app) to that student and their parents if they're
+genuinely behind on their échéancier, exactly as the daily prod task would.
 
 Usage:
-    python manage.py seed_echeancier_students   # once, to create the test data
-    python manage.py test_echeancier_reminders                    # defaults to 2026-06-25
+    python manage.py seed_echeancier_students   # once, to create the ESCAM test data
+    python manage.py test_echeancier_reminders                    # defaults to 2026-06-25, test students only
     python manage.py test_echeancier_reminders --date 2026-05-25
     python manage.py test_echeancier_reminders --email fatou.bamba@escam-test.ci
+
+    # Target a real student directly (any email, not just @escam-test.ci)
+    python manage.py test_echeancier_reminders --email real.student@example.com --date 2026-07-25
 
     # Re-send right away instead of waiting out the real 3-day throttle
     # (_maybe_remind_student skips a student who already got a reminder less
@@ -46,13 +53,21 @@ class Command(BaseCommand):
         sim_date = datetime.datetime.strptime(options['date'], '%Y-%m-%d').date()
         fake_now = timezone.make_aware(datetime.datetime.combine(sim_date, datetime.time(9, 0)))
 
-        students = Student.objects.filter(user__email__endswith='@escam-test.ci').select_related('user', 'site')
         if options['email']:
-            students = students.filter(user__email=options['email'])
+            # Explicit target — any student, real or test. Deliberate opt-in,
+            # unlike the no-args case which must stay test-only.
+            students = Student.objects.filter(user__email=options['email']).select_related('user', 'site')
+            if not students.filter(user__email__endswith='@escam-test.ci').exists():
+                self.stdout.write(self.style.WARNING(
+                    "ATTENTION: cible hors @escam-test.ci — ceci enverra une VRAIE notification "
+                    "(push + in-app) a un vrai etudiant/parent si son echeancier est en retard."
+                ))
+        else:
+            students = Student.objects.filter(user__email__endswith='@escam-test.ci').select_related('user', 'site')
 
         if not students.exists():
             self.stdout.write(self.style.ERROR(
-                "Aucun etudiant de test trouve. Lancez d'abord : "
+                "Aucun etudiant trouve pour ce filtre. Sans --email, lancez d'abord : "
                 "python manage.py seed_echeancier_students"
             ))
             return
