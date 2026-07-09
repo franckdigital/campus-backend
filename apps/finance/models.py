@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, transaction as db_transaction, IntegrityError
 from django.conf import settings
 from django.utils import timezone
 from django.db.models.signals import post_save
@@ -268,9 +268,27 @@ class Payment(BaseModel):
         if self.amount:
             from decimal import Decimal, ROUND_HALF_UP
             self.amount = Decimal(str(self.amount)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-        if not self.payment_number:
+
+        if self.payment_number:
+            super().save(*args, **kwargs)
+            return
+
+        # generate_payment_number() counts existing rows then increments —
+        # two near-simultaneous saves (e.g. a payment finalized twice in a
+        # race, retried webhook) can read the same count before either
+        # commits and collide on the unique constraint. Retry with a fresh
+        # number a few times rather than letting the whole request 500.
+        last_error = None
+        for _ in range(5):
             self.payment_number = self.generate_payment_number()
-        super().save(*args, **kwargs)
+            try:
+                with db_transaction.atomic():
+                    super().save(*args, **kwargs)
+                return
+            except IntegrityError as e:
+                last_error = e
+                self.payment_number = ''
+        raise last_error
 
     def generate_payment_number(self):
         year = timezone.now().year
