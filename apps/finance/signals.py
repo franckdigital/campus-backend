@@ -8,6 +8,49 @@ from .models import Payment
 logger = logging.getLogger(__name__)
 
 
+def _sync_student_invoices(student):
+    """Best-effort: create whatever inscription/scolarité invoices are
+    missing for this student's currently-resolved barème. Never raises —
+    called from post_save signals, so a failure here must not break the
+    enrollment/student save that triggered it."""
+    from .models import ensure_student_invoices
+    try:
+        created, _ = ensure_student_invoices(student)
+        if created:
+            logger.info(
+                "Auto-created %d invoice(s) for %s after barème-affecting change",
+                created, student.matricule,
+            )
+    except Exception as exc:
+        logger.error(
+            "ensure_student_invoices failed for student %s: %s", student.matricule, exc, exc_info=True,
+        )
+
+
+@receiver(post_save, sender='academic.Enrollment')
+def on_enrollment_save(sender, instance, created, **kwargs):
+    """A student's site/programme/niveau (and therefore their barème) is
+    driven by their active Enrollment — moving them onto a new class (e.g.
+    admin edits "Classe" on the student form) previously left
+    Inscription/Scolarité blank until someone happened to click "Préparer
+    mon dossier". Auto-create the missing invoices for the new scope as soon
+    as the enrollment lands, same as a manual prepare-invoices call would."""
+    if instance.status == 'ENROLLED' and instance.is_active:
+        _sync_student_invoices(instance.student)
+
+
+@receiver(post_save, sender='students.Student')
+def on_student_save(sender, instance, created, **kwargs):
+    """Site/modality/affectation_status also feed FeeConfiguration.get_for_enrollment
+    — a student toggled from NON_AFFECTE to AFFECTE (or moved to another
+    site) can land on a different barème even with no enrollment change.
+    Skip on creation: a brand-new student has no enrollment yet, so this
+    would just no-op every time — the Enrollment signal (or an explicit
+    prepare-invoices call) covers them once they're actually enrolled."""
+    if not created:
+        _sync_student_invoices(instance)
+
+
 def _get_or_create_open_session(site, payment_method=None):
     """
     Return an open CashSession for the site.

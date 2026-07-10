@@ -971,3 +971,125 @@ def get_student_installment_schedule(student, academic_year=None):
     result['total'] = running_due
     result['installments'] = rows
     return result
+
+
+def ensure_student_invoices(student, created_by=None):
+    """Create the student's inscription/scolarité invoices from whatever
+    barème currently resolves for their site/enrollment/modality/affectation,
+    if they don't already exist. Shared by:
+      - StudentViewSet.prepare_invoices (explicit "Préparer mon dossier"
+        action, student or admin triggered)
+      - the post_save signals on Enrollment/Student (apps.finance.signals) —
+        so moving a student onto a different barème (new class, or a
+        site/modality/affectation change) automatically creates the invoices
+        for their new scope, instead of leaving Inscription/Scolarité blank
+        until someone happens to click "Préparer mon dossier".
+
+    Never touches invoices that already exist for a given fee type — this
+    only fills a genuine gap, it does not re-price an existing invoice (that
+    reconciliation, for when a barème's amount itself changes, is handled
+    separately by recalculate_invoices_for_fee_config).
+
+    Returns (created_count, invoices_queryset).
+    """
+    import logging
+    from datetime import date, timedelta
+
+    logger = logging.getLogger(__name__)
+
+    current_year = AcademicYear.get_current()
+    if not current_year:
+        current_year = AcademicYear.objects.filter(is_active=True).order_by('-start_date').first()
+    if not current_year:
+        current_year = AcademicYear.objects.order_by('-start_date').first()
+    if not current_year:
+        return 0, Invoice.objects.none()
+
+    site = student.site
+    if not site:
+        from apps.core.models import Site
+        site = Site.objects.filter(is_active=True).first()
+    if not site:
+        return 0, Invoice.objects.none()
+
+    enrollment_row = student.enrollments.filter(is_active=True).values_list(
+        'class_obj_id', 'academic_year_id'
+    ).first()
+    level = None
+    try:
+        if enrollment_row and enrollment_row[0]:
+            from apps.academic.models import Class as AcademicClass
+            class_obj = AcademicClass.objects.select_related('level').get(pk=enrollment_row[0])
+            level = class_obj.level
+    except Exception as e:
+        logger.warning('ensure_student_invoices: cannot resolve level: %s', e)
+
+    tuition_config = FeeConfiguration.get_for_enrollment(
+        site, level, 'SCOLARITE', current_year,
+        modality=student.modality, affectation_status=student.affectation_status
+    )
+    registration_config = FeeConfiguration.get_for_enrollment(
+        site, level, 'INSCRIPTION', current_year,
+        modality=student.modality, affectation_status=student.affectation_status
+    )
+    tuition_amount = float(tuition_config.amount if tuition_config else (student.tuition_fee or 0))
+    reg_amount = float(registration_config.amount if registration_config else (student.registration_fee or 0))
+
+    due_date = (current_year.end_date if getattr(current_year, 'end_date', None)
+                else date.today() + timedelta(days=90))
+
+    scolarite_ft, _ = FeeType.objects.get_or_create(
+        code='SCOLARITE',
+        defaults={'name': 'Frais de scolarité', 'is_recurring': True, 'default_amount': tuition_amount}
+    )
+    inscription_ft, _ = FeeType.objects.get_or_create(
+        code='INSCRIPTION',
+        defaults={'name': "Frais d'inscription", 'is_recurring': False, 'default_amount': reg_amount}
+    )
+
+    created = 0
+
+    if tuition_amount > 0:
+        tuition_exists = Invoice.objects.filter(
+            student=student, items__fee_type=scolarite_ft, is_active=True
+        ).exists()
+        if not tuition_exists:
+            inv = Invoice(student=student, site=site, academic_year=current_year,
+                          due_date=due_date, created_by=created_by)
+            inv.save()
+            InvoiceItem.objects.create(
+                invoice=inv, fee_type=scolarite_ft,
+                description=f'Frais de scolarité — {current_year.name}',
+                quantity=1, unit_price=int(tuition_amount)
+            )
+            inv.save()
+            if inv.balance > 0 and inv.status == 'PAID':
+                Invoice.objects.filter(pk=inv.pk).update(status='DRAFT')
+                inv.status = 'DRAFT'
+            created += 1
+            logger.info('ensure_student_invoices: created tuition invoice %s for %s', inv.invoice_number, student.matricule)
+
+    if reg_amount > 0 and not student.registration_fee_paid:
+        reg_exists = Invoice.objects.filter(
+            student=student, items__fee_type=inscription_ft, is_active=True
+        ).exists()
+        if not reg_exists:
+            inv = Invoice(student=student, site=site, academic_year=current_year,
+                          due_date=due_date, created_by=created_by)
+            inv.save()
+            InvoiceItem.objects.create(
+                invoice=inv, fee_type=inscription_ft,
+                description=f"Frais d'inscription — {current_year.name}",
+                quantity=1, unit_price=int(reg_amount)
+            )
+            inv.save()
+            if inv.balance > 0 and inv.status == 'PAID':
+                Invoice.objects.filter(pk=inv.pk).update(status='DRAFT')
+                inv.status = 'DRAFT'
+            created += 1
+            logger.info('ensure_student_invoices: created registration invoice %s for %s', inv.invoice_number, student.matricule)
+
+    all_invoices = Invoice.objects.filter(
+        student=student, is_active=True
+    ).prefetch_related('items__fee_type', 'payments')
+    return created, all_invoices
