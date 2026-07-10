@@ -335,8 +335,6 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         total_tuition  = float(invoices.aggregate(t=Sum('total'))['t']       or 0)
         total_paid     = float(invoices.aggregate(p=Sum('amount_paid'))['p'] or 0)
-        # Use sum of actual invoice balances for remaining (more accurate than computed)
-        total_balance  = float(invoices.aggregate(b=Sum('balance'))['b']     or 0)
 
         # Separate tuition-only vs inscription totals using fee_type codes
         inscription_invoice_ids = list(
@@ -418,12 +416,25 @@ class StudentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error('financial_summary: unexpected error: %s', e, exc_info=True)
 
-        # Grand total (scolarité + inscription)
-        effective_tuition = total_tuition if has_invoices else (configured_tuition + configured_registration)
+        # Whether a SCOLARITE invoice specifically exists — a student can have
+        # an inscription invoice (billed/paid) with no scolarité invoice yet.
+        # Gating scolarité on "has_invoices" (any invoice of either category)
+        # collapsed a correctly-resolved barème amount to 0 as soon as the
+        # inscription invoice existed, even though scolarité was never billed.
+        tuition_invoices = invoices.exclude(id__in=inscription_invoice_ids)
+        has_tuition_invoices = tuition_invoices.exists()
+        tuition_balance = float(tuition_invoices.aggregate(b=Sum('balance'))['b'] or 0) \
+            if has_tuition_invoices else configured_tuition
+        registration_balance = reg_balance if reg_balance is not None else configured_registration
+
+        # Grand total (scolarité + inscription) — each side independently uses
+        # its own real invoice total when billed, or the barème's configured
+        # amount when not yet invoiced.
+        effective_tuition = (total_registration_invoiced if inscription_invoice_ids else configured_registration) \
+            + (total_tuition_only if has_tuition_invoices else configured_tuition)
         # Tuition only (scolarité, sans inscription)
-        effective_tuition_only = total_tuition_only if has_invoices else configured_tuition
-        # Remaining: use actual invoice balances when invoices exist (always accurate)
-        remaining = total_balance if has_invoices else max(0.0, effective_tuition - total_paid)
+        effective_tuition_only = total_tuition_only if has_tuition_invoices else configured_tuition
+        remaining = registration_balance + tuition_balance
 
         from apps.finance.models import compute_tuition_schedule_status
         schedule_status = compute_tuition_schedule_status(student)
