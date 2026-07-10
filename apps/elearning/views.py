@@ -922,7 +922,16 @@ class SecureExamViewSet(viewsets.ModelViewSet):
         )
 
         if created and exam.quiz:
-            attempt = QuizAttempt.objects.create(quiz=exam.quiz, student=student, max_score=exam.quiz.max_score)
+            # The student's frontend flow calls quiz start-attempt (which resumes
+            # any in-progress attempt) BEFORE this endpoint, and submits answers
+            # against that attempt's id. Blindly creating a new QuizAttempt here
+            # produced a second, permanently-empty attempt disconnected from the
+            # one actually being answered — the admin correction screen read this
+            # orphaned attempt and showed 0 for every question despite a real
+            # submission existing. Reuse the in-progress attempt if one exists.
+            attempt = exam.quiz.attempts.filter(student=student, submitted_at__isnull=True).first()
+            if not attempt:
+                attempt = QuizAttempt.objects.create(quiz=exam.quiz, student=student, max_score=exam.quiz.max_score)
             session.quiz_attempt = attempt
             session.save()
 
@@ -993,6 +1002,11 @@ class ExamSessionSnapshotView(APIView):
         if not image:
             return Response({'detail': 'Image requise.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Read the raw bytes before handing the file to the ORM — saving the
+        # ImageField consumes the upload stream, so reading it again afterwards
+        # returns empty/garbage bytes and silently corrupts the AI analysis below.
+        image_bytes = image.read()
+        image.seek(0)
         snapshot = ExamSnapshot.objects.create(session=session, image=image)
 
         # Optional AI face analysis (async-friendly stub — replace with real vision call)
@@ -1001,7 +1015,7 @@ class ExamSessionSnapshotView(APIView):
         try:
             from .ai_service import _call_claude
             import base64
-            img_b64 = base64.b64encode(image.read()).decode()
+            img_b64 = base64.b64encode(image_bytes).decode()
             system = "Tu es un système de surveillance d'examen. Analyse l'image fournie et réponds en JSON: {\"face_detected\": bool, \"phone_detected\": bool, \"multiple_faces\": bool, \"suspicious\": bool, \"note\": \"...\"}."
             messages = [{
                 "role": "user",
@@ -1068,6 +1082,13 @@ class ExamSessionGradeView(APIView):
         session.corrected_by = request.user
         from django.utils import timezone as tz
         session.corrected_at = tz.now()
+        if session.status == 'STARTED':
+            # A session being graded has necessarily been turned in — without this,
+            # exams submitted via file upload stay stuck in STARTED forever since
+            # that path never flips status (see ExamSessionSubmitFileView), which
+            # keeps them out of the student's "Complétés" list even once graded.
+            session.status = 'SUBMITTED'
+            session.submitted_at = session.submitted_at or tz.now()
         session.save()
         return Response(ExamSessionSerializer(session).data)
 
@@ -1093,6 +1114,10 @@ class ExamSessionSubmitFileView(APIView):
 
         session.submission_file = submission_file
         session.submission_note = request.data.get('note', '')
+        if session.status == 'STARTED':
+            from django.utils import timezone as tz
+            session.status = 'SUBMITTED'
+            session.submitted_at = session.submitted_at or tz.now()
         session.save()
         return Response(ExamSessionSerializer(session).data)
 
