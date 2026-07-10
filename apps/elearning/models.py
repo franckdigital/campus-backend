@@ -934,6 +934,25 @@ class ExamSession(BaseModel):
                 self.submitted_at = self.submitted_at or timezone.now()
         self.save()
 
+    def check_webcam_integrity(self):
+        """Flag a submitted session when the webcam was mandatory but produced
+        zero snapshots and no WEBCAM_LOST event was ever logged either — i.e.
+        monitoring silently never ran (camera never actually started, uploads
+        kept failing...) rather than a genuine, observed hardware drop. Without
+        this, the admin correction screen only shows an informational note and
+        the session looks indistinguishable from a normal, unflagged exam.
+        """
+        if not self.exam.webcam_required or self.snapshots.exists():
+            return
+        if any(e.get('type') == 'WEBCAM_LOST' for e in self.events_log):
+            return
+        tag = "Webcam: aucune capture reçue alors que la webcam était obligatoire"
+        if self.flag_reason and tag in self.flag_reason:
+            return
+        self.is_flagged = True
+        self.flag_reason = f"{self.flag_reason} · {tag}" if self.flag_reason else tag
+        self.save(update_fields=['is_flagged', 'flag_reason'])
+
 
 class ExamSnapshot(BaseModel):
     """Webcam snapshot taken during a secure exam session for proctoring."""

@@ -236,6 +236,11 @@ CINETPAY_FAILED_URL = config('CINETPAY_FAILED_URL', default='')
 CINETPAY_BASE_URL = config('CINETPAY_BASE_URL', default='https://api.cinetpay.net')
 CINETPAY_LOCAL_SANDBOX = config('CINETPAY_LOCAL_SANDBOX', default=False, cast=bool)
 
+# Anthropic Claude API — used by apps.elearning.ai_service (tutor chat, content
+# generation, auto-grading, exam webcam proctoring analysis). Without this,
+# ai_service falls back to a demo stub and none of those features actually run.
+ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
+
 # Zoom Configuration
 ZOOM_API_KEY = config('ZOOM_API_KEY', default='')
 ZOOM_API_SECRET = config('ZOOM_API_SECRET', default='')

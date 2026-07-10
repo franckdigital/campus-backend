@@ -666,6 +666,7 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             exam_session.status = 'SUBMITTED'
             exam_session.submitted_at = exam_session.submitted_at or tz.now()
             exam_session.save(update_fields=['status', 'submitted_at'])
+            exam_session.check_webcam_integrity()
 
         # Re-fetch from DB so serializer gets fresh graded answers (not stale prefetch)
         fresh = QuizAttempt.objects.prefetch_related(
@@ -1090,6 +1091,7 @@ class ExamSessionGradeView(APIView):
             session.status = 'SUBMITTED'
             session.submitted_at = session.submitted_at or tz.now()
         session.save()
+        session.check_webcam_integrity()
         return Response(ExamSessionSerializer(session).data)
 
 
@@ -1119,6 +1121,7 @@ class ExamSessionSubmitFileView(APIView):
             session.status = 'SUBMITTED'
             session.submitted_at = session.submitted_at or tz.now()
         session.save()
+        session.check_webcam_integrity()
         return Response(ExamSessionSerializer(session).data)
 
 
