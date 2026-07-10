@@ -985,10 +985,13 @@ def ensure_student_invoices(student, created_by=None):
         for their new scope, instead of leaving Inscription/Scolarité blank
         until someone happens to click "Préparer mon dossier".
 
-    Never touches invoices that already exist for a given fee type — this
-    only fills a genuine gap, it does not re-price an existing invoice (that
-    reconciliation, for when a barème's amount itself changes, is handled
-    separately by recalculate_invoices_for_fee_config).
+    If the student already has an unpaid/unsettled invoice for a fee type,
+    its item is re-priced to whatever barème resolves NOW (e.g. moved from
+    one class/programme to another) — see _create_or_reprice below. Already
+    PAID/CANCELLED invoices are never touched. This is a different trigger
+    than recalculate_invoices_for_fee_config (which reconciles everyone under
+    an unchanged scope when the barème's own amount is edited) — this one
+    fires when the STUDENT's scope changes instead.
 
     Returns (created_count, invoices_queryset).
     """
@@ -1049,45 +1052,53 @@ def ensure_student_invoices(student, created_by=None):
 
     created = 0
 
+    def _create_or_reprice(fee_type, amount, description):
+        """Create the invoice if the student has none yet for this fee type.
+        If one already exists but isn't settled (not PAID/CANCELLED), re-price
+        its item to the amount that resolves NOW — otherwise a student moved
+        onto a different barème (new class/site/modality/affectation) keeps
+        showing the OLD program's invoiced total forever, since an invoice
+        once created is never re-evaluated against the student's current
+        scope. A PAID/CANCELLED invoice is never touched — already-settled
+        money is never retroactively rewritten."""
+        nonlocal created
+        existing = Invoice.objects.filter(
+            student=student, items__fee_type=fee_type, is_active=True
+        ).exclude(status__in=['PAID', 'CANCELLED']).prefetch_related('items').first()
+
+        if existing:
+            item = existing.items.filter(fee_type=fee_type).first()
+            if item and float(item.unit_price) != amount:
+                old_price = item.unit_price
+                item.unit_price = int(amount)
+                item.save(update_fields=['unit_price', 'total'])
+                existing.refresh_from_db()
+                existing.save()  # recompute totals/balance/status
+                logger.info(
+                    'ensure_student_invoices: re-priced %s item on invoice %s for %s (%s -> %s FCFA, scope change)',
+                    fee_type.code, existing.invoice_number, student.matricule, old_price, amount,
+                )
+            return
+
+        inv = Invoice(student=student, site=site, academic_year=current_year,
+                      due_date=due_date, created_by=created_by)
+        inv.save()
+        InvoiceItem.objects.create(
+            invoice=inv, fee_type=fee_type, description=description,
+            quantity=1, unit_price=int(amount)
+        )
+        inv.save()
+        if inv.balance > 0 and inv.status == 'PAID':
+            Invoice.objects.filter(pk=inv.pk).update(status='DRAFT')
+            inv.status = 'DRAFT'
+        created += 1
+        logger.info('ensure_student_invoices: created %s invoice %s for %s', fee_type.code, inv.invoice_number, student.matricule)
+
     if tuition_amount > 0:
-        tuition_exists = Invoice.objects.filter(
-            student=student, items__fee_type=scolarite_ft, is_active=True
-        ).exists()
-        if not tuition_exists:
-            inv = Invoice(student=student, site=site, academic_year=current_year,
-                          due_date=due_date, created_by=created_by)
-            inv.save()
-            InvoiceItem.objects.create(
-                invoice=inv, fee_type=scolarite_ft,
-                description=f'Frais de scolarité — {current_year.name}',
-                quantity=1, unit_price=int(tuition_amount)
-            )
-            inv.save()
-            if inv.balance > 0 and inv.status == 'PAID':
-                Invoice.objects.filter(pk=inv.pk).update(status='DRAFT')
-                inv.status = 'DRAFT'
-            created += 1
-            logger.info('ensure_student_invoices: created tuition invoice %s for %s', inv.invoice_number, student.matricule)
+        _create_or_reprice(scolarite_ft, tuition_amount, f'Frais de scolarité — {current_year.name}')
 
     if reg_amount > 0 and not student.registration_fee_paid:
-        reg_exists = Invoice.objects.filter(
-            student=student, items__fee_type=inscription_ft, is_active=True
-        ).exists()
-        if not reg_exists:
-            inv = Invoice(student=student, site=site, academic_year=current_year,
-                          due_date=due_date, created_by=created_by)
-            inv.save()
-            InvoiceItem.objects.create(
-                invoice=inv, fee_type=inscription_ft,
-                description=f"Frais d'inscription — {current_year.name}",
-                quantity=1, unit_price=int(reg_amount)
-            )
-            inv.save()
-            if inv.balance > 0 and inv.status == 'PAID':
-                Invoice.objects.filter(pk=inv.pk).update(status='DRAFT')
-                inv.status = 'DRAFT'
-            created += 1
-            logger.info('ensure_student_invoices: created registration invoice %s for %s', inv.invoice_number, student.matricule)
+        _create_or_reprice(inscription_ft, reg_amount, f"Frais d'inscription — {current_year.name}")
 
     all_invoices = Invoice.objects.filter(
         student=student, is_active=True
