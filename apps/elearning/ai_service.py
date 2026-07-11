@@ -3,7 +3,10 @@ Proxy service to Anthropic Claude API for e-learning AI features (Lots 15/16/17)
 Falls back to a stub response if ANTHROPIC_API_KEY is not configured.
 """
 import json
+import logging
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = getattr(settings, 'ANTHROPIC_API_KEY', '')
 GEMINI_API_KEY = getattr(settings, 'GEMINI_API_KEY', '')
@@ -196,44 +199,69 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
         },
         'required': ['description', 'face_detected', 'phone_detected', 'multiple_faces', 'suspicious'],
     }
-    try:
-        resp = requests.post(
-            f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
-            params={'key': GEMINI_API_KEY},
-            json={
-                'contents': [{
-                    'parts': [
-                        {'text': prompt},
-                        {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
-                    ],
-                }],
-                'generationConfig': {
-                    'temperature': 0.1,
-                    'responseMimeType': 'application/json',
-                    # A strict schema (rather than just prompting for JSON)
-                    # is what actually guarantees well-formed, complete
-                    # output — responseMimeType alone still occasionally
-                    # produced JSON that failed to parse.
-                    'responseSchema': response_schema,
-                    'maxOutputTokens': 800,
-                    # Newer Gemini models spend part of the output token
-                    # budget on hidden "thinking" tokens by default — for a
-                    # one-sentence classification task that just silently
-                    # truncates the actual JSON answer before it's written.
-                    'thinkingConfig': {'thinkingBudget': 0},
+    import time
+
+    max_attempts = 3
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
+                params={'key': GEMINI_API_KEY},
+                json={
+                    'contents': [{
+                        'parts': [
+                            {'text': prompt},
+                            {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
+                        ],
+                    }],
+                    'generationConfig': {
+                        'temperature': 0.1,
+                        'responseMimeType': 'application/json',
+                        # A strict schema (rather than just prompting for JSON)
+                        # is what actually guarantees well-formed, complete
+                        # output — responseMimeType alone still occasionally
+                        # produced JSON that failed to parse.
+                        'responseSchema': response_schema,
+                        'maxOutputTokens': 800,
+                        # Newer Gemini models spend part of the output token
+                        # budget on hidden "thinking" tokens by default — for a
+                        # one-sentence classification task that just silently
+                        # truncates the actual JSON answer before it's written.
+                        'thinkingConfig': {'thinkingBudget': 0},
+                    },
                 },
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        text = resp.json()['candidates'][0]['content']['parts'][0]['text']
-        parsed = json.loads(text)
-        return {
-            'description': parsed.get('description') or 'Analyse indisponible.',
-            'face_detected': parsed.get('face_detected', True),
-            'phone_detected': parsed.get('phone_detected', False),
-            'multiple_faces': parsed.get('multiple_faces', False),
-            'suspicious': parsed.get('suspicious', False),
-        }
-    except Exception as e:
-        return _gemini_stub_result(f"[Erreur analyse IA : {e}]")
+                timeout=20,
+            )
+            resp.raise_for_status()
+            text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+            parsed = json.loads(text)
+            return {
+                'description': parsed.get('description') or 'Analyse indisponible.',
+                'face_detected': parsed.get('face_detected', True),
+                'phone_detected': parsed.get('phone_detected', False),
+                'multiple_faces': parsed.get('multiple_faces', False),
+                'suspicious': parsed.get('suspicious', False),
+            }
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            status_code = e.response.status_code if e.response is not None else None
+            # 429 (rate limited) and 503 (momentarily overloaded) are
+            # transient on Google's side — worth a couple of quick retries.
+            # Anything else (401 bad key, 400 bad request...) won't succeed
+            # on retry, so fail fast instead of burning the request budget.
+            if status_code not in (429, 503) or attempt == max_attempts - 1:
+                break
+            time.sleep(1.5 * (attempt + 1))
+        except Exception as e:
+            last_error = e
+            break
+
+    logger.warning('Gemini snapshot analysis failed after retries: %s', last_error)
+    # Show a clean, non-technical message to the admin instead of the raw
+    # exception (e.g. a Python traceback string) — the real error is still
+    # logged above for debugging. Not marked suspicious: a transient outage
+    # on Google's side isn't evidence of anything about the student.
+    return _gemini_stub_result(
+        "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
+    )
