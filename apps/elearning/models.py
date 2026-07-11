@@ -953,6 +953,44 @@ class ExamSession(BaseModel):
         self.flag_reason = f"{self.flag_reason} · {tag}" if self.flag_reason else tag
         self.save(update_fields=['is_flagged', 'flag_reason'])
 
+    def resolve_percent(self):
+        """Best-effort 0-100 grade percent for this session, whichever
+        source has actually been graded — a manually-entered `score` (the
+        file-upload exam path, scaled against `exam.max_score`) or the
+        linked `QuizAttempt`'s already-computed `percent` (the quiz-based
+        exam path, which never writes back onto `ExamSession.score`).
+        Returns None when nothing has been graded yet, so callers (e.g. a
+        ranking) can exclude the session rather than showing a bogus 0%.
+        """
+        if self.score is not None:
+            max_score = float(self.exam.max_score or 0)
+            if max_score <= 0:
+                return None
+            return float(self.score) / max_score * 100
+        attempt = self.quiz_attempt
+        if attempt and attempt.is_graded:
+            return float(attempt.percent)
+        return None
+
+
+# Fixed mention scale (independent of exam.pass_score_percent, which only
+# gates the separate pass/fail badge) — ordered highest threshold first so
+# the first match wins; anything below the lowest threshold is "Insuffisant".
+MENTION_THRESHOLDS = [
+    (90, 'Excellent'),
+    (80, 'Très bien'),
+    (70, 'Bien'),
+    (60, 'Assez bien'),
+    (50, 'Passable'),
+]
+
+
+def mention_for_percent(percent):
+    for threshold, label in MENTION_THRESHOLDS:
+        if percent >= threshold:
+            return label
+    return 'Insuffisant'
+
 
 class ExamSnapshot(BaseModel):
     """Webcam snapshot taken during a secure exam session for proctoring."""

@@ -6,6 +6,8 @@ import json
 from django.conf import settings
 
 ANTHROPIC_API_KEY = getattr(settings, 'ANTHROPIC_API_KEY', '')
+GEMINI_API_KEY = getattr(settings, 'GEMINI_API_KEY', '')
+GEMINI_VISION_MODEL = getattr(settings, 'GEMINI_VISION_MODEL', 'gemini-2.0-flash')
 
 
 def _call_claude(system_prompt: str, messages: list[dict], max_tokens: int = 2048) -> tuple[str, int]:
@@ -136,3 +138,85 @@ def check_plagiarism_basic(text: str, references: list[str]) -> dict:
         'is_flagged': max_similarity > 70,
         'details': results,
     }
+
+
+def _gemini_stub_result(reason: str) -> dict:
+    return {
+        'description': reason,
+        'face_detected': True,
+        'phone_detected': False,
+        'multiple_faces': False,
+        'suspicious': False,
+    }
+
+
+def analyze_exam_snapshot(image_bytes: bytes) -> dict:
+    """Proctoring — Gemini vision analysis of one exam webcam snapshot.
+
+    Unlike the boolean-only client-side TensorFlow.js detection, this asks a
+    real vision model to describe in plain French exactly what it observes
+    (talking to someone off-camera, looking at a phone, a second person in
+    frame...), not just "phone: yes/no". Returns a dict always shaped the
+    same way — including a 'description' string suitable for direct display
+    next to the snapshot in the admin review screen — so callers never need
+    to special-case a missing/failed analysis.
+
+    Falls back to a neutral stub (no flags raised) if GEMINI_API_KEY isn't
+    configured or the call fails, so proctoring degrades gracefully instead
+    of crashing when the free-tier key is absent or rate-limited.
+    """
+    if not GEMINI_API_KEY:
+        return _gemini_stub_result("Analyse IA indisponible (GEMINI_API_KEY non configurée).")
+
+    import base64
+    import requests
+
+    img_b64 = base64.b64encode(image_bytes).decode()
+    prompt = (
+        "Tu es un système de surveillance d'examen en ligne. Regarde cette capture webcam "
+        "d'un(e) étudiant(e) en train de composer et décris EXACTEMENT ce que tu observes, "
+        "en une phrase courte et factuelle en français. Sois précis et concret, par exemple : "
+        "\"L'étudiant regarde son téléphone posé à côté du clavier\", \"Une deuxième personne "
+        "est visible derrière l'étudiant\", \"L'étudiant semble parler à quelqu'un hors champ\", "
+        "\"L'étudiant tient un téléphone devant son visage\", \"Aucune anomalie, l'étudiant "
+        "regarde son écran normalement\". Réponds uniquement avec un objet JSON strict : "
+        "{\"description\": string (la phrase en français), \"face_detected\": bool, "
+        "\"phone_detected\": bool, \"multiple_faces\": bool, \"suspicious\": bool "
+        "(true si le comportement observé est suspect pour un examen surveillé)}."
+    )
+    try:
+        resp = requests.post(
+            f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
+            params={'key': GEMINI_API_KEY},
+            json={
+                'contents': [{
+                    'parts': [
+                        {'text': prompt},
+                        {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
+                    ],
+                }],
+                'generationConfig': {
+                    'temperature': 0.2,
+                    'responseMimeType': 'application/json',
+                    'maxOutputTokens': 500,
+                    # Newer Gemini models spend part of the output token
+                    # budget on hidden "thinking" tokens by default — for a
+                    # one-sentence classification task that just silently
+                    # truncates the actual JSON answer before it's written.
+                    'thinkingConfig': {'thinkingBudget': 0},
+                },
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+        parsed = json.loads(text)
+        return {
+            'description': parsed.get('description') or 'Analyse indisponible.',
+            'face_detected': parsed.get('face_detected', True),
+            'phone_detected': parsed.get('phone_detected', False),
+            'multiple_faces': parsed.get('multiple_faces', False),
+            'suspicious': parsed.get('suspicious', False),
+        }
+    except Exception as e:
+        return _gemini_stub_result(f"[Erreur analyse IA : {e}]")

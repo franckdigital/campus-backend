@@ -19,6 +19,7 @@ from .models import (
     MeetingSegment, SessionParticipant, SessionLog,
     ExamSnapshot,
     Course, CourseSection, CourseChapter, CourseLesson,
+    mention_for_percent,
 )
 from .serializers import (
     ZoomMeetingSerializer, LessonSerializer, LessonListSerializer,
@@ -969,6 +970,38 @@ class SecureExamViewSet(viewsets.ModelViewSet):
         qs = ExamSession.objects.filter(exam=exam).select_related('student__user', 'quiz_attempt')
         return Response(ExamSessionSerializer(qs, many=True).data)
 
+    @action(detail=True, methods=['get'], url_path='ranking')
+    def ranking(self, request, pk=None):
+        """Student-facing leaderboard — rank + mention only (Excellent/Très
+        bien/.../Insuffisant), never the raw score or any other session
+        detail (feedback, flags, submitted files...). Deliberately a
+        separate, narrower action from `sessions` above, which dumps full
+        ExamSession data and is meant for teacher/admin use only.
+        """
+        exam = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        sessions = ExamSession.objects.filter(
+            exam=exam, status__in=['SUBMITTED', 'FLAGGED']
+        ).select_related('student__user', 'quiz_attempt')
+
+        graded = []
+        for s in sessions:
+            percent = s.resolve_percent()
+            if percent is not None:
+                graded.append((s, percent))
+        graded.sort(key=lambda pair: -pair[1])
+
+        result = [
+            {
+                'rank': rank,
+                'is_me': bool(student) and s.student_id == student.id,
+                'full_name': s.student.user.get_full_name() or s.student.matricule,
+                'mention': mention_for_percent(percent),
+            }
+            for rank, (s, percent) in enumerate(graded, 1)
+        ]
+        return Response({'results': result, 'total_graded': len(result)})
+
     @action(detail=True, methods=['get'], url_path='my-session')
     def my_session(self, request, pk=None):
         exam = self.get_object()
@@ -1010,44 +1043,27 @@ class ExamSessionSnapshotView(APIView):
         image.seek(0)
         snapshot = ExamSnapshot.objects.create(session=session, image=image)
 
-        # Optional AI face analysis (async-friendly stub — replace with real vision call)
-        face_detected = True
-        phone_detected = False
-        try:
-            from .ai_service import _call_claude
-            import base64
-            img_b64 = base64.b64encode(image_bytes).decode()
-            system = "Tu es un système de surveillance d'examen. Analyse l'image fournie et réponds en JSON: {\"face_detected\": bool, \"phone_detected\": bool, \"multiple_faces\": bool, \"suspicious\": bool, \"note\": \"...\"}."
-            messages = [{
-                "role": "user",
-                "content": [{
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
-                }, {"type": "text", "text": "Analyse cette capture webcam d'examen."}]
-            }]
-            import json as _json
-            result, _ = _call_claude(system, messages, max_tokens=200)
-            try:
-                data = _json.loads(result)
-                face_detected  = data.get('face_detected', True)
-                phone_detected = data.get('phone_detected', False)
-                snapshot.face_detected  = face_detected
-                snapshot.phone_detected = phone_detected
-                snapshot.ai_analysis    = result
-                snapshot.save()
+        # Gemini vision analysis — a real natural-language description of what
+        # the snapshot shows (not just boolean flags), stored directly on the
+        # snapshot so the admin review screen can display it right next to
+        # the image without a second round-trip.
+        from .ai_service import analyze_exam_snapshot
+        analysis = analyze_exam_snapshot(image_bytes)
+        face_detected  = analysis['face_detected']
+        phone_detected = analysis['phone_detected']
+        snapshot.face_detected  = face_detected
+        snapshot.phone_detected = phone_detected
+        snapshot.ai_analysis    = analysis['description']
+        snapshot.save()
 
-                if not face_detected or phone_detected or data.get('multiple_faces') or data.get('suspicious'):
-                    detail = data.get('note', 'Anomalie détectée')
-                    session.log_event('AI_FLAG', detail)
-            except Exception:
-                pass
-        except Exception:
-            pass
+        if not face_detected or phone_detected or analysis['multiple_faces'] or analysis['suspicious']:
+            session.log_event('AI_FLAG', analysis['description'])
 
         return Response({
             'snapshot_id': str(snapshot.id),
             'face_detected': face_detected,
             'phone_detected': phone_detected,
+            'description': analysis['description'],
         })
 
 

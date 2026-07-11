@@ -237,9 +237,16 @@ CINETPAY_BASE_URL = config('CINETPAY_BASE_URL', default='https://api.cinetpay.ne
 CINETPAY_LOCAL_SANDBOX = config('CINETPAY_LOCAL_SANDBOX', default=False, cast=bool)
 
 # Anthropic Claude API — used by apps.elearning.ai_service (tutor chat, content
-# generation, auto-grading, exam webcam proctoring analysis). Without this,
-# ai_service falls back to a demo stub and none of those features actually run.
+# generation, auto-grading). Without this, ai_service falls back to a demo
+# stub and none of those features actually run.
 ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
+
+# Google Gemini API — used by apps.elearning.ai_service.analyze_exam_snapshot
+# for exam webcam proctoring (free tier, no billing required — get a key at
+# aistudio.google.com). Without this, snapshot analysis falls back to a
+# neutral stub (no anomaly flags raised, description says AI is unconfigured).
+GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
+GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-flash-latest')
 
 # Zoom Configuration
 ZOOM_API_KEY = config('ZOOM_API_KEY', default='')
