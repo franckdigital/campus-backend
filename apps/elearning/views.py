@@ -999,7 +999,7 @@ class SecureExamViewSet(viewsets.ModelViewSet):
             {
                 'rank': rank,
                 'is_me': bool(student) and s.student_id == student.id,
-                'full_name': s.student.user.get_full_name() or s.student.matricule,
+                'full_name': s.student.user.full_name or s.student.matricule,
                 'mention': mention_for_percent(percent),
             }
             for rank, (s, percent) in enumerate(graded, 1)
