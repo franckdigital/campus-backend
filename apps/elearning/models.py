@@ -852,6 +852,14 @@ class ExamSession(BaseModel):
     fullscreen_exit_count = models.PositiveIntegerField(default=0)
     copy_attempt_count = models.PositiveIntegerField(default=0)
     focus_lost_count = models.PositiveIntegerField(default=0)
+    # Number of times the client-side webcam proctoring has blocked the
+    # student mid-exam over a sustained suspicious signal (object held up,
+    # gaze away from screen, second person in frame...). The first block is a
+    # timed 5-minute suspension the student resumes from; a second one is
+    # treated as a repeat offense and ends the exam outright (see
+    # SecureExamViewSet.log_event, which reads this back to tell the frontend
+    # which of the two responses applies).
+    fraud_block_count = models.PositiveIntegerField(default=0)
 
     is_flagged = models.BooleanField(default=False)
     flag_reason = models.TextField(blank=True)
@@ -918,6 +926,23 @@ class ExamSession(BaseModel):
             # was interrupted before grading the attempt.
             self.is_flagged = True
             tag = f"Webcam: {details or 'Caméra perdue pendant l\'examen'}"
+            if not self.flag_reason:
+                self.flag_reason = tag
+            elif tag not in self.flag_reason:
+                self.flag_reason = f"{self.flag_reason} · {tag}"
+        elif event_type == 'FRAUD_BLOCK':
+            # Unlike a single AI_FLAG reading, this only fires client-side
+            # after a suspicious signal is *sustained* across several
+            # consecutive detection ticks (see ExamPage.jsx) — the frontend
+            # has already suspended the student behind a blocking modal by
+            # the time this is logged. First offense (count reaches 1) is a
+            # timed suspension the student resumes from on their own; a
+            # second one is a repeat offense the frontend ends the exam over
+            # — this method just keeps the authoritative count so a page
+            # refresh mid-block can't be used to reset it back to zero.
+            self.fraud_block_count += 1
+            self.is_flagged = True
+            tag = f"Fraude webcam (blocage n°{self.fraud_block_count}): {details or 'Comportement suspect prolongé'}"
             if not self.flag_reason:
                 self.flag_reason = tag
             elif tag not in self.flag_reason:

@@ -962,7 +962,11 @@ class SecureExamViewSet(viewsets.ModelViewSet):
         event_type = request.data.get('event_type', 'OTHER')
         details = request.data.get('details', {})
         session.log_event(event_type, details)
-        return Response({'status': 'logged', 'is_flagged': session.is_flagged})
+        return Response({
+            'status': 'logged',
+            'is_flagged': session.is_flagged,
+            'fraud_block_count': session.fraud_block_count,
+        })
 
     @action(detail=True, methods=['get'], url_path='sessions')
     def sessions(self, request, pk=None):
