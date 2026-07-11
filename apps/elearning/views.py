@@ -1092,9 +1092,21 @@ class ExamSessionGradeView(APIView):
 
         if score is not None:
             try:
-                session.score = float(score)
+                score = float(score)
             except (TypeError, ValueError):
                 return Response({'detail': 'Score invalide.'}, status=status.HTTP_400_BAD_REQUEST)
+            # Defense in depth: this endpoint had no bound check at all, so a
+            # client-side computation bug (e.g. a ratio that divided by a
+            # stale/mismatched max_score and clamped to a false "full marks")
+            # could silently persist an out-of-range grade with nothing here
+            # to catch it.
+            max_score = float(session.exam.max_score or 0)
+            if score < 0 or (max_score > 0 and score > max_score):
+                return Response(
+                    {'detail': f"Le score doit être compris entre 0 et {max_score}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            session.score = score
         if feedback:
             session.feedback = feedback
         if corrected_file:

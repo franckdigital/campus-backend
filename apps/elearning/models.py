@@ -948,10 +948,20 @@ class ExamSession(BaseModel):
             elif tag not in self.flag_reason:
                 self.flag_reason = f"{self.flag_reason} · {tag}"
 
+        # Tab switches and fullscreen exits are both "left the secured exam
+        # environment" events, and the frontend's client-side lock treats
+        # them as contributing to the same limit — mirror that here so the
+        # session actually gets flagged/closed server-side to match, instead
+        # of only the fullscreen-exit counter silently incrementing forever.
         max_sw = self.exam.max_tab_switches
-        if max_sw and self.tab_switch_count > max_sw:
+        if max_sw and (self.tab_switch_count > max_sw or self.fullscreen_exit_count > max_sw):
             self.is_flagged = True
-            self.flag_reason = f"Trop de changements d'onglet ({self.tab_switch_count}/{max_sw})"
+            reasons = []
+            if self.tab_switch_count > max_sw:
+                reasons.append(f"changements d'onglet ({self.tab_switch_count}/{max_sw})")
+            if self.fullscreen_exit_count > max_sw:
+                reasons.append(f"sorties du plein écran ({self.fullscreen_exit_count}/{max_sw})")
+            self.flag_reason = "Trop de " + " et de ".join(reasons)
             # Actually close the session — being flagged shouldn't leave it stuck
             # in STARTED, which would let the student keep answering or retake it.
             if self.status == 'STARTED':
