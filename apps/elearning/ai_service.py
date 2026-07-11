@@ -173,17 +173,29 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
 
     img_b64 = base64.b64encode(image_bytes).decode()
     prompt = (
-        "Tu es un système de surveillance d'examen en ligne. Regarde cette capture webcam "
-        "d'un(e) étudiant(e) en train de composer et décris EXACTEMENT ce que tu observes, "
-        "en une phrase courte et factuelle en français. Sois précis et concret, par exemple : "
-        "\"L'étudiant regarde son téléphone posé à côté du clavier\", \"Une deuxième personne "
-        "est visible derrière l'étudiant\", \"L'étudiant semble parler à quelqu'un hors champ\", "
-        "\"L'étudiant tient un téléphone devant son visage\", \"Aucune anomalie, l'étudiant "
-        "regarde son écran normalement\". Réponds uniquement avec un objet JSON strict : "
-        "{\"description\": string (la phrase en français), \"face_detected\": bool, "
-        "\"phone_detected\": bool, \"multiple_faces\": bool, \"suspicious\": bool "
-        "(true si le comportement observé est suspect pour un examen surveillé)}."
+        "Tu es un système de surveillance d'examen en ligne. Regarde très attentivement cette "
+        "capture webcam d'un(e) étudiant(e) en train de composer — y compris les bords de "
+        "l'image et tout ce que la personne tient dans ses mains ou près de son visage, même "
+        "partiellement visible ou flou — et décris EXACTEMENT ce que tu observes, en une phrase "
+        "courte et factuelle en français. Sois précis et concret, par exemple : \"L'étudiant "
+        "regarde son téléphone posé à côté du clavier\", \"Une deuxième personne est visible "
+        "derrière l'étudiant\", \"L'étudiant semble parler à quelqu'un hors champ\", \"L'étudiant "
+        "tient un téléphone ou un objet devant son visage\", \"Aucune anomalie, l'étudiant "
+        "regarde son écran normalement\". En cas de doute sur la présence d'un téléphone ou d'un "
+        "objet tenu en main, signale-le plutôt que de l'ignorer (mieux vaut un faux positif "
+        "qu'une fraude manquée)."
     )
+    response_schema = {
+        'type': 'OBJECT',
+        'properties': {
+            'description':     {'type': 'STRING'},
+            'face_detected':   {'type': 'BOOLEAN'},
+            'phone_detected':  {'type': 'BOOLEAN'},
+            'multiple_faces':  {'type': 'BOOLEAN'},
+            'suspicious':      {'type': 'BOOLEAN'},
+        },
+        'required': ['description', 'face_detected', 'phone_detected', 'multiple_faces', 'suspicious'],
+    }
     try:
         resp = requests.post(
             f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
@@ -196,9 +208,14 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
                     ],
                 }],
                 'generationConfig': {
-                    'temperature': 0.2,
+                    'temperature': 0.1,
                     'responseMimeType': 'application/json',
-                    'maxOutputTokens': 500,
+                    # A strict schema (rather than just prompting for JSON)
+                    # is what actually guarantees well-formed, complete
+                    # output — responseMimeType alone still occasionally
+                    # produced JSON that failed to parse.
+                    'responseSchema': response_schema,
+                    'maxOutputTokens': 800,
                     # Newer Gemini models spend part of the output token
                     # budget on hidden "thinking" tokens by default — for a
                     # one-sentence classification task that just silently
