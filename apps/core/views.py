@@ -97,7 +97,7 @@ class SystemConfigViewSet(viewsets.ModelViewSet):
     serializer_class = SystemConfigSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter]
     search_fields = ['key', 'description']
-    filterset_fields = ['is_active', 'is_public', 'site']
+    filterset_fields = ['key', 'is_active', 'is_public', 'site']
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny])
     def public(self, request):
