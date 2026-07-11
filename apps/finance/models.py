@@ -673,12 +673,20 @@ class FeeConfiguration(BaseModel):
         modality + affectation status + fee_category (INSCRIPTION/SCOLARITE
         — always required, since the two are now separate barème rows).
 
-        Modality and affectation are both matched strictly in the four most-
+        Modality and affectation are both matched strictly in the most-
         specific tiers (an affected/state-assigned student's fee genuinely
         differs from a private-track one, same as présentiel/e-learning), then
-        relaxed one at a time — affectation first, then modality — in the
-        broader fallback tiers, mirroring how site/level/program already
-        relax from most to least specific.
+        relaxed one at a time — modality first (at each level/program depth),
+        then affectation, then modality+affectation together — mirroring how
+        site/level/program already relax from most to least specific.
+
+        The modality-relaxed tiers exist because schools commonly enter one
+        barème per niveau scoped to a single modality (historically
+        PRESENTIEL) without realizing that leaves ELEARNING/HYBRIDE students
+        at that same niveau matching nothing at all — better to reuse the
+        level-accurate amount from another modality than to silently return
+        no barème (which surfaces to students/admins as a blank "Scolarité"
+        status). An exact modality match is always tried first and wins.
         """
         qs = cls.objects.filter(is_active=True, fee_category=fee_category)
         # Most specific: site + modality + affectation + level + year
@@ -692,15 +700,30 @@ class FeeConfiguration(BaseModel):
                          level=level, academic_year=None).first()
         if cfg:
             return cfg
+        # site + affectation + level, any modality — see docstring
+        if level:
+            cfg = qs.filter(site=site, affectation_status=affectation_status,
+                             level=level, academic_year=None).first()
+            if cfg:
+                return cfg
         # site + modality + affectation + program
         if level and level.program_id:
             cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
                              program_id=level.program_id, level=None).first()
             if cfg:
                 return cfg
+            # site + affectation + program, any modality
+            cfg = qs.filter(site=site, affectation_status=affectation_status,
+                             program_id=level.program_id, level=None).first()
+            if cfg:
+                return cfg
         # site + modality + affectation only
         cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
                          level=None, program=None).first()
+        if cfg:
+            return cfg
+        # site + affectation only, any modality
+        cfg = qs.filter(site=site, affectation_status=affectation_status, level=None, program=None).first()
         if cfg:
             return cfg
         # site + modality only (any affectation)
