@@ -4,6 +4,8 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.response import Response
 from .models import CinetPayConfig, CinetPayTransaction
 from apps.finance.models import Payment, PaymentMethod
 
@@ -300,3 +302,92 @@ class CinetPayService:
             'transaction': transaction,
             'error': transaction.status_message or 'Paiement non confirmé',
         }
+
+
+def get_or_create_invoice_for_payment(request, student_id, data):
+    """Resolve an Invoice for a Mobile Money payment that wasn't initiated
+    against an existing invoice — create one on the fly (Invoice + one
+    InvoiceItem) from student_id + amount so the payment always lands
+    somewhere instead of being silently unattached.
+
+    Shared by CinetPayInitiateView (online flow) and
+    ManualMobileMoneySubmitView (manual/semi-auto flow) so both stay in
+    sync. Returns (invoice, None) on success, or (None, Response) on
+    failure — same shape either caller can return straight from its view.
+
+    `data.get('amount')` may be a Decimal (CinetPayInitiateSerializer's
+    validated_data) or a plain string (raw multipart form data from the
+    manual submission endpoint) — normalized to Decimal here so both
+    callers can pass their data through unchanged.
+    """
+    from datetime import timedelta
+    from decimal import Decimal, InvalidOperation
+    from apps.students.models import Student
+    from apps.finance.models import FeeType, Invoice, InvoiceItem
+    from apps.core.models import AcademicYear
+    from django.utils import timezone as tz
+
+    raw_amount = data.get('amount')
+    try:
+        amount = Decimal(str(raw_amount)) if raw_amount not in (None, '') else None
+    except InvalidOperation:
+        amount = None
+    if not amount or amount <= 0:
+        return None, Response(
+            {'detail': 'Le montant est requis et doit être supérieur à 0'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        student = Student.objects.get(id=student_id)
+    except Student.DoesNotExist:
+        return None, Response({'detail': 'Étudiant non trouvé'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not student.site_id:
+        return None, Response({'detail': "Site de l'étudiant introuvable"}, status=status.HTTP_400_BAD_REQUEST)
+
+    academic_year = AcademicYear.get_current()
+    if not academic_year:
+        return None, Response(
+            {'detail': 'Aucune année académique en cours'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    fee_type_code = (data.get('fee_type_code') or 'TUITION').upper()
+    fee_type, _ = FeeType.objects.get_or_create(
+        code=fee_type_code,
+        defaults={
+            'name': 'Frais de scolarité' if fee_type_code == 'TUITION' else fee_type_code.title(),
+            'default_amount': amount,
+        }
+    )
+
+    description = data.get('description') or 'Paiement Mobile Money'
+    invoice = Invoice.objects.create(
+        student=student,
+        site=student.site,
+        academic_year=academic_year,
+        due_date=tz.now().date() + timedelta(days=30),
+        notes=description,
+        created_by=request.user if request.user.is_authenticated else None,
+    )
+    InvoiceItem.objects.create(
+        invoice=invoice,
+        fee_type=fee_type,
+        description=description,
+        quantity=1,
+        unit_price=amount,
+    )
+    invoice.refresh_from_db()  # pick up the item just created
+    invoice.save()  # recompute subtotal/total/balance now that the item exists
+
+    # calculate_totals() ran once already at Invoice.objects.create() time,
+    # when there were no items yet — a 0/0 balance made it set status
+    # 'PAID'. That doesn't get corrected by the recompute above unless one
+    # of its other branches fires, which they won't for a fresh unpaid
+    # invoice (amount_paid=0, not overdue) — so fix it explicitly.
+    if invoice.status == 'PAID' and invoice.balance > 0:
+        invoice.status = 'PENDING'
+        invoice.save(update_fields=['status'])
+
+    return invoice, None

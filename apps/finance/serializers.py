@@ -52,6 +52,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'id', 'payment_number', 'invoice', 'invoice_number', 'student_name',
             'payment_method', 'payment_method_name', 'amount', 'status',
             'payment_date', 'validated_at', 'reference', 'notes', 'proof', 'proof_url',
+            'payer_phone', 'recipient_phone', 'declared_payment_date', 'submitted_by',
             'received_by', 'received_by_name', 'validated_by', 'is_active'
         ]
         read_only_fields = ['id', 'payment_number', 'payment_date', 'validated_at', 'proof_url']

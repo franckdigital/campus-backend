@@ -286,6 +286,47 @@ def notify_payment_validated(payment):
 notify_payment_received = notify_payment_validated
 
 
+def notify_manual_payment_submitted(payment):
+    """Semi-auto Mobile Money submission (mobile app) → admin/finance staff,
+    so someone reviews the proof and validates it (see
+    apps.payments.views.ManualMobileMoneySubmitView and
+    apps.finance.views.PaymentViewSet.validate). Mirrors notify_cash_deposit's
+    role targeting — this is the same "money came in, needs review" event,
+    just declared by the payer instead of recorded at a cash register."""
+    from apps.accounts.models import User
+
+    student = payment.invoice.student
+    amount  = payment.amount
+    inv_no  = payment.invoice.invoice_number
+    payer_name = payment.submitted_by.full_name if payment.submitted_by else student.user.full_name
+
+    reviewers = User.objects.filter(
+        is_active=True,
+        roles__name__in=['ADMIN', 'DIRECTOR', 'FINANCE'],
+    ).distinct()
+
+    for user in reviewers:
+        n = Notification.send(
+            recipient=user,
+            notification_type='PAYMENT',
+            priority='HIGH',
+            title='💰 Paiement Mobile Money à valider',
+            message=(
+                f'{payer_name} a soumis une preuve de paiement de {int(amount):,} FCFA '
+                f'pour {student.user.full_name} (facture {inv_no}). En attente de validation.'
+            ).replace(',', ' '),
+            data={
+                'payment_id': str(payment.id),
+                'invoice_id': str(payment.invoice.id),
+                'student_id': str(student.id),
+                'type': 'PAYMENT_PENDING',
+            },
+            action_url=f'/payments/{payment.id}',
+            site=payment.invoice.site,
+        )
+        dispatch_notification(n, channels=['IN_APP', 'PUSH'])
+
+
 def notify_absence_recorded(attendance_record):
     """H2: Absence constatée → parents."""
     student = attendance_record.student

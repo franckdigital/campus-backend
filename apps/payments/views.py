@@ -4,6 +4,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter
 
@@ -14,7 +15,7 @@ from .serializers import (
     CinetPayConfigSerializer, CinetPayTransactionSerializer,
     CinetPayInitiateSerializer
 )
-from .services import CinetPayService
+from .services import CinetPayService, get_or_create_invoice_for_payment
 from apps.finance.models import Invoice
 
 
@@ -153,78 +154,18 @@ class CinetPayInitiateView(APIView):
     def _create_invoice_for_payment(self, request, student_id, data):
         """Create an Invoice + InvoiceItem for a Mobile Money payment that
         wasn't initiated against an existing invoice. Returns (invoice, None)
-        on success, or (None, Response) on failure."""
-        from datetime import timedelta
-        from apps.students.models import Student
-        from apps.finance.models import FeeType, InvoiceItem
-        from apps.core.models import AcademicYear
-        from django.utils import timezone as tz
+        on success, or (None, Response) on failure.
 
-        amount = data.get('amount')
-        if not amount or amount <= 0:
+        Delegates to the shared helper (also used by
+        ManualMobileMoneySubmitView) so the two flows can't drift apart."""
+        invoice, error = get_or_create_invoice_for_payment(request, student_id, data)
+        if error and not data.get('amount'):
             logger.warning(
                 'CinetPayInitiate 400 (montant manquant, creation facture a la volee): '
                 'user=%s student_id=%s payload=%s',
                 request.user, student_id, request.data,
             )
-            return None, Response(
-                {'detail': 'Le montant est requis et doit être supérieur à 0'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            student = Student.objects.get(id=student_id)
-        except Student.DoesNotExist:
-            return None, Response({'detail': 'Étudiant non trouvé'}, status=status.HTTP_404_NOT_FOUND)
-
-        if not student.site_id:
-            return None, Response({'detail': "Site de l'étudiant introuvable"}, status=status.HTTP_400_BAD_REQUEST)
-
-        academic_year = AcademicYear.get_current()
-        if not academic_year:
-            return None, Response(
-                {'detail': 'Aucune année académique en cours'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        fee_type_code = (data.get('fee_type_code') or 'TUITION').upper()
-        fee_type, _ = FeeType.objects.get_or_create(
-            code=fee_type_code,
-            defaults={
-                'name': 'Frais de scolarité' if fee_type_code == 'TUITION' else fee_type_code.title(),
-                'default_amount': amount,
-            }
-        )
-
-        description = data.get('description') or 'Paiement Mobile Money'
-        invoice = Invoice.objects.create(
-            student=student,
-            site=student.site,
-            academic_year=academic_year,
-            due_date=tz.now().date() + timedelta(days=30),
-            notes=description,
-            created_by=request.user if request.user.is_authenticated else None,
-        )
-        InvoiceItem.objects.create(
-            invoice=invoice,
-            fee_type=fee_type,
-            description=description,
-            quantity=1,
-            unit_price=amount,
-        )
-        invoice.refresh_from_db()  # pick up the item just created
-        invoice.save()  # recompute subtotal/total/balance now that the item exists
-
-        # calculate_totals() ran once already at Invoice.objects.create() time,
-        # when there were no items yet — a 0/0 balance made it set status
-        # 'PAID'. That doesn't get corrected by the recompute above unless one
-        # of its other branches fires, which they won't for a fresh unpaid
-        # invoice (amount_paid=0, not overdue) — so fix it explicitly.
-        if invoice.status == 'PAID' and invoice.balance > 0:
-            invoice.status = 'PENDING'
-            invoice.save(update_fields=['status'])
-
-        return invoice, None
+        return invoice, error
 
 
 class CinetPayCallbackView(APIView):
@@ -439,3 +380,132 @@ class CinetPayDemoPayView(APIView):
             'amount': str(transaction.amount),
             'invoice_number': transaction.invoice.invoice_number,
         })
+
+
+class ManualMobileMoneySubmitView(APIView):
+    """Semi-automatic Mobile Money submission: the student/parent declares a
+    transfer made outside the app (proof + phone numbers + optional
+    transaction id + declared date) and it's recorded as a PENDING Payment
+    for an admin to review and validate from the back-office (see
+    apps.finance.views.PaymentViewSet.validate). CinetPay stays fully wired
+    (see CinetPayInitiateView above) — the mobile app's UI just no longer
+    drives payments through it, using this endpoint instead.
+    """
+    fee_gate_exempt = True
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        from datetime import datetime
+        from decimal import Decimal, InvalidOperation
+        from django.utils import timezone
+        from apps.finance.models import Payment, PaymentMethod
+        from apps.finance.serializers import PaymentSerializer
+        from apps.students.models import StudentParent
+
+        data = request.data
+        payer_phone = (data.get('payer_phone') or '').strip()
+        recipient_phone = (data.get('recipient_phone') or '').strip()
+        declared_date_str = (data.get('declared_payment_date') or '').strip()
+        proof = data.get('proof')
+
+        if not payer_phone or not recipient_phone:
+            return Response(
+                {'detail': 'Le numéro du payeur et le numéro destinataire sont requis'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if not proof:
+            return Response({'detail': 'La preuve de paiement est requise'}, status=status.HTTP_400_BAD_REQUEST)
+        if not declared_date_str:
+            return Response({'detail': 'La date de paiement est requise'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            declared_date = datetime.strptime(declared_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return Response(
+                {'detail': 'Date de paiement invalide (format attendu AAAA-MM-JJ)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if declared_date > timezone.now().date():
+            return Response(
+                {'detail': 'La date de paiement ne peut pas être dans le futur'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        invoice_id = data.get('invoice_id')
+        student_id = data.get('student_id')
+        if not invoice_id and not student_id:
+            return Response({'detail': 'invoice_id ou student_id requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if invoice_id:
+            try:
+                invoice = Invoice.objects.get(id=invoice_id)
+            except Invoice.DoesNotExist:
+                return Response({'detail': 'Facture non trouvée'}, status=status.HTTP_404_NOT_FOUND)
+
+            if invoice.status in ['PAID', 'CANCELLED']:
+                return Response(
+                    {'detail': 'Cette facture ne peut pas être payée'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                amount = Decimal(str(data.get('amount'))) if data.get('amount') else invoice.balance
+            except InvalidOperation:
+                return Response({'detail': 'Montant invalide'}, status=status.HTTP_400_BAD_REQUEST)
+            if amount <= 0:
+                return Response({'detail': 'Le montant doit être supérieur à 0'}, status=status.HTTP_400_BAD_REQUEST)
+            if amount > invoice.balance + 1:
+                return Response(
+                    {'detail': 'Le montant dépasse le solde restant'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            # No invoice yet — create one on the fly, same helper CinetPay uses.
+            invoice, error = get_or_create_invoice_for_payment(request, student_id, data)
+            if error:
+                return error
+            amount = invoice.balance
+
+        student = invoice.student
+        user = request.user
+        is_owner = student.user_id == user.id
+        is_staff = user.user_type in ('ADMIN', 'STAFF')
+        is_parent = False
+        if not (is_owner or is_staff) and user.user_type == 'PARENT':
+            is_parent = StudentParent.objects.filter(student=student, parent__user=user).exists()
+        if not (is_owner or is_staff or is_parent):
+            return Response({'detail': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
+
+        method, _ = PaymentMethod.objects.get_or_create(
+            code='MOBILE_MONEY_MANUAL',
+            defaults={
+                'name': 'Mobile Money (preuve à valider)',
+                'is_online': False,
+                'requires_verification': True,
+            }
+        )
+
+        payment = Payment.objects.create(
+            invoice=invoice,
+            payment_method=method,
+            amount=amount,
+            status='PENDING',
+            reference=(data.get('transaction_reference') or '').strip(),
+            notes="Paiement Mobile Money soumis depuis l'application mobile — en attente de validation.",
+            proof=proof,
+            payer_phone=payer_phone,
+            recipient_phone=recipient_phone,
+            declared_payment_date=declared_date,
+            submitted_by=user,
+            received_by=user,
+        )
+
+        try:
+            from apps.notifications.services import notify_manual_payment_submitted
+            notify_manual_payment_submitted(payment)
+        except Exception:
+            logger.exception('notify_manual_payment_submitted failed for payment %s', payment.id)
+
+        return Response(
+            PaymentSerializer(payment, context={'request': request}).data,
+            status=status.HTTP_201_CREATED
+        )

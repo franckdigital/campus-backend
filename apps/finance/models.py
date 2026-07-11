@@ -239,7 +239,24 @@ class Payment(BaseModel):
     reference = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True)
     proof = models.FileField(upload_to='payment_proofs/', blank=True, null=True, verbose_name='Preuve de paiement')
-    
+
+    # Manual Mobile Money submission (student/parent self-service, pending
+    # admin review) — the operator number the payer sent from, the number
+    # that received it, and the date the payer declares the transfer
+    # happened (distinct from payment_date, which is when the row was
+    # created server-side).
+    payer_phone = models.CharField(max_length=30, blank=True, verbose_name='Numéro du payeur')
+    recipient_phone = models.CharField(max_length=30, blank=True, verbose_name='Numéro destinataire')
+    declared_payment_date = models.DateField(null=True, blank=True, verbose_name='Date de paiement déclarée')
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submitted_payments',
+        verbose_name='Soumis par'
+    )
+
     received_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
