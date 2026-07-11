@@ -702,6 +702,11 @@ class FeeConfiguration(BaseModel):
             return cfg
         # site + affectation + level, any modality — see docstring
         if level:
+            if academic_year:
+                cfg = qs.filter(site=site, affectation_status=affectation_status,
+                                 level=level, academic_year=academic_year).first()
+                if cfg:
+                    return cfg
             cfg = qs.filter(site=site, affectation_status=affectation_status,
                              level=level, academic_year=None).first()
             if cfg:
