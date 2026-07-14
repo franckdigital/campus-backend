@@ -1,0 +1,25 @@
+[Unit]
+Description=Escam Gunicorn daemon (HTTP)
+After=network.target mysql.service redis.service escam-mobile-money-init.service
+Requires=mysql.service escam-mobile-money-init.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/escam/backend
+Environment="PATH=/var/www/escam/backend/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=config.settings"
+ExecStart=/var/www/escam/backend/venv/bin/gunicorn \
+    --bind 127.0.0.1:9012 \
+    --workers 3 \
+    --timeout 120 \
+    --access-logfile /var/log/escam/gunicorn_access.log \
+    --error-logfile /var/log/escam/gunicorn_error.log \
+    config.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s TERM $MAINPID
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

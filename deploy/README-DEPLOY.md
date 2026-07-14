@@ -90,7 +90,7 @@ sudo systemctl reload nginx
 ## 6. SSL avec Let's Encrypt
 
 ```bash
-sudo certbot --nginx -d campus.votredomaine.com
+sudo certbot --nginx -d api-campus.numerix.digital
 ```
 
 ## 7. Vérification

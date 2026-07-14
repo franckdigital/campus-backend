@@ -1,0 +1,25 @@
+[Unit]
+Description=Escam Backend — Celery Beat Scheduler
+After=network.target redis.service
+Requires=redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/escam/backend
+Environment=PATH=/var/www/escam/backend/venv/bin
+Environment=PYTHONPATH=/var/www/escam/backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings
+EnvironmentFile=/var/www/escam/backend/.env
+ExecStart=/var/www/escam/backend/venv/bin/celery \
+    -A config beat \
+    --loglevel=info \
+    --logfile=/var/log/escam/celery-beat.log \
+    --scheduler django_celery_beat.schedulers:DatabaseScheduler
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
