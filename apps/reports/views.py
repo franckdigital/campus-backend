@@ -1,8 +1,33 @@
+import calendar
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.db.models import Count, Sum, Avg
+from django.db.models import Count, Sum, Avg, Q
+from django.db.models.functions import ExtractMonth, ExtractWeekDay
 from django.utils import timezone
 from datetime import timedelta
+
+MONTHS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
+# ExtractWeekDay is DB-normalized to 1=Sunday..7=Saturday regardless of backend.
+WEEKDAY_TO_LABEL = {2: 'Lun', 3: 'Mar', 4: 'Mer', 5: 'Jeu', 6: 'Ven', 7: 'Sam', 1: 'Dim'}
+
+
+def _period_to_range(period, today):
+    """Mirrors the frontend's getPeriodDates(): 'week', 'all', or a month number '1'..'12'."""
+    if period == 'week':
+        start = today - timedelta(days=today.weekday())
+        return start, today
+    if period == 'all':
+        return today.replace(month=1, day=1), today.replace(month=12, day=31)
+    try:
+        m = int(period)
+        if not 1 <= m <= 12:
+            raise ValueError
+    except (TypeError, ValueError):
+        start = today - timedelta(days=today.weekday())
+        return start, today
+    start = today.replace(month=m, day=1)
+    last_day = calendar.monthrange(today.year, m)[1]
+    return start, today.replace(month=m, day=last_day)
 
 
 class DashboardView(APIView):
@@ -279,3 +304,77 @@ class ElearningReportView(APIView):
                 'completion_rate': round(completed_progress / total_progress * 100, 1) if total_progress else 0,
             },
         })
+
+
+class RevenueChartView(APIView):
+    """Monthly revenue + distinct paying students, Jan through the current
+    month of the selected year — feeds the admin Dashboard revenue chart."""
+    def get(self, request):
+        site_id = request.query_params.get('site_id')
+        today = timezone.now().date()
+        year = int(request.query_params.get('year') or today.year)
+
+        from apps.finance.models import Payment
+
+        payments = Payment.objects.filter(status='SUCCESS', payment_date__year=year)
+        if site_id:
+            payments = payments.filter(invoice__site_id=site_id)
+
+        by_month = {
+            row['m']: row
+            for row in payments.annotate(m=ExtractMonth('payment_date')).values('m').annotate(
+                revenue=Sum('amount'),
+                students=Count('invoice__student', distinct=True),
+            )
+        }
+
+        last_month = today.month if year == today.year else 12
+        data = [
+            {
+                'month': MONTHS_FR[m - 1],
+                'revenue': float(by_month[m]['revenue']) if m in by_month else 0,
+                'students': by_month[m]['students'] if m in by_month else 0,
+            }
+            for m in range(1, last_month + 1)
+        ]
+        return Response(data)
+
+
+class AttendanceChartView(APIView):
+    """Present/absent counts by weekday over the selected period — feeds the
+    admin Dashboard attendance chart."""
+    def get(self, request):
+        site_id = request.query_params.get('site_id')
+        period = request.query_params.get('period', 'week')
+        today = timezone.now().date()
+        start, end = _period_to_range(period, today)
+
+        from apps.attendance.models import AttendanceRecord
+
+        records = AttendanceRecord.objects.filter(
+            attendance_session__date__gte=start,
+            attendance_session__date__lte=end,
+        )
+        if site_id:
+            records = records.filter(attendance_session__session__class_obj__site_id=site_id)
+
+        by_day = {
+            row['wd']: row
+            for row in records.annotate(wd=ExtractWeekDay('attendance_session__date')).values('wd').annotate(
+                present=Count('id', filter=Q(status='PRESENT')),
+                absent=Count('id', filter=Q(status='ABSENT')),
+            )
+        }
+
+        # Mon(2)..Sat(7) then Sun(1), so the week reads left-to-right starting Monday.
+        ordered_weekdays = [2, 3, 4, 5, 6, 7, 1]
+        data = [
+            {
+                'day': WEEKDAY_TO_LABEL[wd],
+                'present': by_day[wd]['present'] if wd in by_day else 0,
+                'absent': by_day[wd]['absent'] if wd in by_day else 0,
+            }
+            for wd in ordered_weekdays
+            if wd in by_day
+        ]
+        return Response(data)
