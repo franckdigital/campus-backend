@@ -1,6 +1,7 @@
 from django.db.models import Q, Count, Avg
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
@@ -45,6 +46,57 @@ from .serializers import (
 )
 from .services import ZoomService
 from apps.academic.models import Session
+
+
+class TeacherScopedContentMixin:
+    """Restricts Lesson/Quiz/Assignment list/retrieve/create/update to the
+    class+subject pairs the requesting user actually teaches (ClassSubjectTeacher,
+    is_active), when that user is a TEACHER. Admins/staff and non-teacher
+    requesters (students, parents) are completely unaffected — these viewsets
+    previously had no scoping at all and were only ever reached through
+    admin-only frontend routes, so this only activates once a real teacher
+    request comes in (e.g. from the new teacher-facing e-learning pages).
+    """
+    def _teacher_profile(self):
+        user = self.request.user
+        if getattr(user, 'user_type', None) in ('ADMIN', 'STAFF'):
+            return None
+        return getattr(user, 'teacher_profile', None)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        teacher = self._teacher_profile()
+        if not teacher:
+            return qs
+        pairs = teacher.class_subjects.filter(is_active=True).values_list('class_obj_id', 'subject_id')
+        if not pairs:
+            return qs.none()
+        scope = Q()
+        for class_id, subject_id in pairs:
+            scope |= Q(class_obj_id=class_id, subject_id=subject_id)
+        return qs.filter(scope)
+
+    def _check_teacher_scope(self, serializer):
+        teacher = self._teacher_profile()
+        if not teacher:
+            return None
+        instance = getattr(serializer, 'instance', None)
+        class_obj = serializer.validated_data.get('class_obj') or (instance.class_obj if instance else None)
+        subject = serializer.validated_data.get('subject') or (instance.subject if instance else None)
+        if not teacher.class_subjects.filter(class_obj=class_obj, subject=subject, is_active=True).exists():
+            raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
+        return teacher
+
+    def perform_create(self, serializer):
+        teacher = self._check_teacher_scope(serializer)
+        if teacher is not None and 'teacher' in serializer.fields:
+            serializer.save(teacher=teacher)
+        else:
+            serializer.save()
+
+    def perform_update(self, serializer):
+        self._check_teacher_scope(serializer)
+        serializer.save()
 
 
 class ZoomMeetingViewSet(viewsets.ModelViewSet):
@@ -104,7 +156,7 @@ class CreateZoomMeetingView(APIView):
             )
 
 
-class LessonViewSet(viewsets.ModelViewSet):
+class LessonViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = Lesson.objects.select_related(
         'class_obj', 'subject', 'teacher__user', 'chapter', 'zoom_meeting'
     ).prefetch_related('attachments').all()
@@ -346,7 +398,7 @@ class LessonAttachmentViewSet(viewsets.ModelViewSet):
         return Response({'updated': len(updated)})
 
 
-class QuizViewSet(viewsets.ModelViewSet):
+class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = Quiz.objects.select_related('class_obj', 'subject', 'lesson').prefetch_related('questions__choices').all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title', 'description']
@@ -676,7 +728,7 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(QuizAttemptSerializer(fresh).data)
 
 
-class AssignmentViewSet(viewsets.ModelViewSet):
+class AssignmentViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = Assignment.objects.select_related(
         'class_obj', 'subject', 'teacher__user', 'lesson'
     ).prefetch_related('submissions', 'submissions__correction').all()
