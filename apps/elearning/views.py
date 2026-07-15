@@ -69,11 +69,20 @@ class TeacherScopedContentMixin:
         if not teacher:
             return qs
         pairs = teacher.class_subjects.filter(is_active=True).values_list('class_obj_id', 'subject_id')
-        if not pairs:
-            return qs.none()
         scope = Q()
+        has_scope = False
         for class_id, subject_id in pairs:
             scope |= Q(class_obj_id=class_id, subject_id=subject_id)
+            has_scope = True
+        # Some content types (Lesson, Assignment) also carry a direct
+        # `teacher` FK — honor that even when the ClassSubjectTeacher
+        # timetable assignment is missing/incomplete, so content a teacher
+        # actually authored/owns doesn't silently disappear.
+        if any(f.name == 'teacher' for f in qs.model._meta.get_fields()):
+            scope |= Q(teacher=teacher)
+            has_scope = True
+        if not has_scope:
+            return qs.none()
         return qs.filter(scope)
 
     def _check_teacher_scope(self, serializer):

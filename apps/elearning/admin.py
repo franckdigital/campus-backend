@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin
 from .models import (
     ZoomMeeting, Lesson, LessonAttachment, Chapter, LessonProgress,
@@ -121,8 +122,30 @@ class ReadingProgressAdmin(admin.ModelAdmin):
     search_fields = ['student__matricule', 'document__title']
 
 
+class SecureExamAdminForm(forms.ModelForm):
+    """class_obj/subject are nullable on the model (to allow partial saves
+    from other flows), but a SecureExam without both is permanently
+    invisible to every teacher — TeacherScopedContentMixin.get_queryset()
+    (apps/elearning/views.py) only matches exams whose (class_obj, subject)
+    pair corresponds to an active ClassSubjectTeacher assignment. Require
+    them here so admin-created exams can't silently vanish for teachers."""
+    class Meta:
+        model = SecureExam
+        fields = '__all__'
+
+    def clean(self):
+        cleaned = super().clean()
+        if not cleaned.get('class_obj') or not cleaned.get('subject'):
+            raise forms.ValidationError(
+                "Classe et matière sont obligatoires : sans ces deux champs, "
+                "l'examen n'apparaît jamais côté enseignant."
+            )
+        return cleaned
+
+
 @admin.register(SecureExam)
 class SecureExamAdmin(admin.ModelAdmin):
+    form = SecureExamAdminForm
     list_display = ['title', 'class_obj', 'subject', 'exam_type', 'duration_minutes', 'start_date', 'is_published']
     list_filter = ['exam_type', 'is_published', 'fullscreen_required', 'webcam_required']
     search_fields = ['title', 'description']
