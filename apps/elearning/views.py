@@ -99,6 +99,29 @@ class TeacherScopedContentMixin:
         serializer.save()
 
 
+class InstructorScopedCourseMixin:
+    """Restricts Course (and its nested Section/Chapter/Lesson) to courses
+    authored by the requesting teacher. Course.instructor is a plain User FK
+    — a "cours autonome" isn't tied to one class+subject like Lesson/Quiz/
+    Assignment/SecureExam/VirtualLab are — so this needs its own simpler
+    scoping instead of TeacherScopedContentMixin. Admins/staff and non-teacher
+    requesters are unaffected.
+    """
+    instructor_lookup = 'instructor'
+
+    def _is_teacher_request(self):
+        user = self.request.user
+        if getattr(user, 'user_type', None) in ('ADMIN', 'STAFF'):
+            return False
+        return hasattr(user, 'teacher_profile')
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not self._is_teacher_request():
+            return qs
+        return qs.filter(**{self.instructor_lookup: self.request.user})
+
+
 class ZoomMeetingViewSet(viewsets.ModelViewSet):
     queryset = ZoomMeeting.objects.select_related('session', 'host', 'created_by').all()
     serializer_class = ZoomMeetingSerializer
@@ -926,7 +949,7 @@ class LibraryDocumentViewSet(viewsets.ModelViewSet):
 # LOT 12 — Examens sécurisés
 # ─────────────────────────────────────────────────────────────────────────────
 
-class SecureExamViewSet(viewsets.ModelViewSet):
+class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = SecureExam.objects.select_related('class_obj', 'subject', 'quiz').all()
     serializer_class = SecureExamSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
@@ -1213,7 +1236,7 @@ class ExamSessionSubmitFileView(APIView):
 # LOT 13 — Laboratoires virtuels
 # ─────────────────────────────────────────────────────────────────────────────
 
-class VirtualLabViewSet(viewsets.ModelViewSet):
+class VirtualLabViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = VirtualLab.objects.select_related('class_obj', 'subject', 'lesson').annotate(
         submission_count=Count('submissions')
     ).all()
@@ -1967,16 +1990,14 @@ class MeetingSegmentViewSet(viewsets.ModelViewSet):
 
 # ── Cours autonomes ──────────────────────────────────────────────────────────
 
-class CourseViewSet(viewsets.ModelViewSet):
+class CourseViewSet(InstructorScopedCourseMixin, viewsets.ModelViewSet):
+    queryset = Course.objects.select_related('site', 'instructor').prefetch_related(
+        'sections__chapters__lessons'
+    ).filter(is_active=True)
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields   = ['title', 'subtitle', 'description']
     ordering_fields = ['created_at', 'title', 'status', 'total_students', 'average_rating']
     filterset_fields = ['site', 'status', 'level', 'is_free', 'is_active']
-
-    def get_queryset(self):
-        return Course.objects.select_related('site', 'instructor').prefetch_related(
-            'sections__chapters__lessons'
-        ).filter(is_active=True)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -2028,31 +2049,49 @@ class CourseViewSet(viewsets.ModelViewSet):
         return Response({'id': None, 'title': None})
 
 
-class CourseSectionViewSet(viewsets.ModelViewSet):
+class CourseSectionViewSet(InstructorScopedCourseMixin, viewsets.ModelViewSet):
+    queryset = CourseSection.objects.prefetch_related('chapters__lessons').filter(is_active=True)
     serializer_class = CourseSectionSerializer
     filter_backends  = [DjangoFilterBackend]
     filterset_fields = ['course', 'is_active']
+    instructor_lookup = 'course__instructor'
 
-    def get_queryset(self):
-        return CourseSection.objects.prefetch_related('chapters__lessons').filter(is_active=True)
+    def perform_create(self, serializer):
+        if self._is_teacher_request():
+            course = serializer.validated_data.get('course')
+            if course and course.instructor_id != self.request.user.id:
+                raise PermissionDenied("Ce cours ne vous appartient pas.")
+        serializer.save()
 
 
-class CourseChapterViewSet(viewsets.ModelViewSet):
+class CourseChapterViewSet(InstructorScopedCourseMixin, viewsets.ModelViewSet):
+    queryset = CourseChapter.objects.prefetch_related('lessons').filter(is_active=True)
     serializer_class = CourseChapterSerializer
     filter_backends  = [DjangoFilterBackend]
     filterset_fields = ['section', 'is_active']
+    instructor_lookup = 'section__course__instructor'
 
-    def get_queryset(self):
-        return CourseChapter.objects.prefetch_related('lessons').filter(is_active=True)
+    def perform_create(self, serializer):
+        if self._is_teacher_request():
+            section = serializer.validated_data.get('section')
+            if section and section.course.instructor_id != self.request.user.id:
+                raise PermissionDenied("Ce cours ne vous appartient pas.")
+        serializer.save()
 
 
-class CourseLessonViewSet(viewsets.ModelViewSet):
+class CourseLessonViewSet(InstructorScopedCourseMixin, viewsets.ModelViewSet):
+    queryset = CourseLesson.objects.filter(is_active=True)
     serializer_class = CourseLessonSerializer
     filter_backends  = [DjangoFilterBackend]
     filterset_fields = ['chapter', 'content_type', 'is_active']
+    instructor_lookup = 'chapter__section__course__instructor'
 
-    def get_queryset(self):
-        return CourseLesson.objects.filter(is_active=True)
+    def perform_create(self, serializer):
+        if self._is_teacher_request():
+            chapter = serializer.validated_data.get('chapter')
+            if chapter and chapter.section.course.instructor_id != self.request.user.id:
+                raise PermissionDenied("Ce cours ne vous appartient pas.")
+        serializer.save()
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
