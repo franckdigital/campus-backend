@@ -140,12 +140,26 @@ class Invoice(BaseModel):
         self.balance = Decimal(str(self.balance)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
         self.amount_paid = Decimal(str(self.amount_paid)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
         
-        if self.balance <= 0:
+        if self.status == 'CANCELLED':
+            return
+
+        # An invoice is saved once before its items exist (see save() below,
+        # and ensure_student_invoices()) — at that point total/balance are
+        # both 0, which used to read as "nothing owed, fully paid" and get
+        # stuck there: none of the branches below ever walked it back down
+        # once real items brought the balance back up (amount_paid stays 0,
+        # due_date usually isn't in the past yet). Requiring a positive
+        # total to call something PAID closes that hole, and the final
+        # elif explicitly resets a now-unjustified PAID/OVERDUE instead of
+        # leaving it stale.
+        if self.total > 0 and self.balance <= 0:
             self.status = 'PAID'
         elif self.amount_paid > 0:
             self.status = 'PARTIAL'
-        elif self.due_date and self.due_date < timezone.now().date() and self.status not in ['PAID', 'CANCELLED']:
+        elif self.due_date and self.due_date < timezone.now().date():
             self.status = 'OVERDUE'
+        elif self.status in ('PAID', 'OVERDUE'):
+            self.status = 'SENT'
 
     def add_payment(self, amount):
         from decimal import Decimal, ROUND_HALF_UP
