@@ -408,60 +408,64 @@ class ManualMobileMoneySubmitView(APIView):
         declared_date_str = (data.get('declared_payment_date') or '').strip()
         proof = data.get('proof')
 
-        if not payer_phone or not recipient_phone:
-            return Response(
-                {'detail': 'Le numéro du payeur et le numéro destinataire sont requis'},
-                status=status.HTTP_400_BAD_REQUEST
+        # A 400 here previously only surfaced as an unlabeled "Bad Request"
+        # line in journalctl (the access log doesn't include the response
+        # body) — logging the reason + the request's own identifying fields
+        # makes these diagnosable without guessing from the response's byte
+        # count.
+        def _reject(detail, code=status.HTTP_400_BAD_REQUEST):
+            logger.warning(
+                "ManualMobileMoneySubmitView rejected (%s): %s | invoice_id=%s student_id=%s "
+                "amount=%s payer_phone=%s recipient_phone=%s user_id=%s",
+                code, detail, data.get('invoice_id'), data.get('student_id'), data.get('amount'),
+                payer_phone, recipient_phone, getattr(request.user, 'id', None),
             )
+            return Response({'detail': detail}, status=code)
+
+        if not payer_phone or not recipient_phone:
+            return _reject('Le numéro du payeur et le numéro destinataire sont requis')
         if not proof:
-            return Response({'detail': 'La preuve de paiement est requise'}, status=status.HTTP_400_BAD_REQUEST)
+            return _reject('La preuve de paiement est requise')
         if not declared_date_str:
-            return Response({'detail': 'La date de paiement est requise'}, status=status.HTTP_400_BAD_REQUEST)
+            return _reject('La date de paiement est requise')
         try:
             declared_date = datetime.strptime(declared_date_str, '%Y-%m-%d').date()
         except ValueError:
-            return Response(
-                {'detail': 'Date de paiement invalide (format attendu AAAA-MM-JJ)'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return _reject('Date de paiement invalide (format attendu AAAA-MM-JJ)')
         if declared_date > timezone.now().date():
-            return Response(
-                {'detail': 'La date de paiement ne peut pas être dans le futur'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return _reject('La date de paiement ne peut pas être dans le futur')
 
         invoice_id = data.get('invoice_id')
         student_id = data.get('student_id')
         if not invoice_id and not student_id:
-            return Response({'detail': 'invoice_id ou student_id requis'}, status=status.HTTP_400_BAD_REQUEST)
+            return _reject('invoice_id ou student_id requis')
 
         if invoice_id:
             try:
                 invoice = Invoice.objects.get(id=invoice_id)
             except Invoice.DoesNotExist:
-                return Response({'detail': 'Facture non trouvée'}, status=status.HTTP_404_NOT_FOUND)
+                return _reject('Facture non trouvée', status.HTTP_404_NOT_FOUND)
 
             if invoice.status in ['PAID', 'CANCELLED']:
-                return Response(
-                    {'detail': 'Cette facture ne peut pas être payée'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return _reject('Cette facture ne peut pas être payée')
 
             try:
                 amount = Decimal(str(data.get('amount'))) if data.get('amount') else invoice.balance
             except InvalidOperation:
-                return Response({'detail': 'Montant invalide'}, status=status.HTTP_400_BAD_REQUEST)
+                return _reject('Montant invalide')
             if amount <= 0:
-                return Response({'detail': 'Le montant doit être supérieur à 0'}, status=status.HTTP_400_BAD_REQUEST)
+                return _reject('Le montant doit être supérieur à 0')
             if amount > invoice.balance + 1:
-                return Response(
-                    {'detail': 'Le montant dépasse le solde restant'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                return _reject('Le montant dépasse le solde restant')
         else:
             # No invoice yet — create one on the fly, same helper CinetPay uses.
             invoice, error = get_or_create_invoice_for_payment(request, student_id, data)
             if error:
+                logger.warning(
+                    "ManualMobileMoneySubmitView rejected (%s) via get_or_create_invoice_for_payment: "
+                    "student_id=%s amount=%s user_id=%s",
+                    error.status_code, student_id, data.get('amount'), getattr(request.user, 'id', None),
+                )
                 return error
             amount = invoice.balance
 
@@ -473,7 +477,7 @@ class ManualMobileMoneySubmitView(APIView):
         if not (is_owner or is_staff) and user.user_type == 'PARENT':
             is_parent = StudentParent.objects.filter(student=student, parent__user=user).exists()
         if not (is_owner or is_staff or is_parent):
-            return Response({'detail': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
+            return _reject('Non autorisé', status.HTTP_403_FORBIDDEN)
 
         method, _ = PaymentMethod.objects.get_or_create(
             code='MOBILE_MONEY_MANUAL',
