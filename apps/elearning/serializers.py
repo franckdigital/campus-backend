@@ -388,11 +388,11 @@ class AssignmentListSerializer(serializers.ModelSerializer):
             'submitted_at': sub.submitted_at,
             'is_late': sub.is_late,
             'content': sub.content,
-            'file': sub.file.url if sub.file else None,
+            'file': request.build_absolute_uri(sub.file.url) if sub.file else None,
             'correction': {
                 'score': correction.score,
                 'feedback': correction.feedback,
-                'corrected_file': correction.corrected_file.url if correction.corrected_file else None,
+                'corrected_file': request.build_absolute_uri(correction.corrected_file.url) if correction.corrected_file else None,
             } if correction else None,
         }
 

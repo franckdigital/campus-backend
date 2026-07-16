@@ -784,7 +784,7 @@ class AssignmentViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     def submissions(self, request, pk=None):
         assignment = self.get_object()
         submissions = assignment.submissions.select_related('student__user')
-        serializer = AssignmentSubmissionSerializer(submissions, many=True)
+        serializer = AssignmentSubmissionSerializer(submissions, many=True, context={'request': request})
         return Response(serializer.data)
 
 
@@ -826,23 +826,40 @@ class SubmitAssignmentView(APIView):
                 {'detail': 'Profil étudiant non trouvé'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        if AssignmentSubmission.objects.filter(assignment=assignment, student=student).exists():
-            return Response(
-                {'detail': 'Vous avez déjà soumis ce devoir'},
-                status=status.HTTP_400_BAD_REQUEST
+
+        content = request.data.get('content', '')
+        file = request.FILES.get('file')
+
+        existing = AssignmentSubmission.objects.filter(assignment=assignment, student=student).first()
+        if existing:
+            # Already graded: submission is frozen, don't let a resubmission
+            # silently invalidate the teacher's correction.
+            if hasattr(existing, 'correction'):
+                return Response(
+                    {'detail': 'Ce devoir a déjà été corrigé, vous ne pouvez plus le modifier.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Not graded yet: allow completing/replacing the submission — e.g. the
+            # student first submitted a text answer and now wants to attach the PDF.
+            if content:
+                existing.content = content
+            if file:
+                existing.file = file
+            existing.save()
+            submission = existing
+            created = False
+        else:
+            submission = AssignmentSubmission.objects.create(
+                assignment=assignment,
+                student=student,
+                content=content,
+                file=file,
             )
-        
-        submission = AssignmentSubmission.objects.create(
-            assignment=assignment,
-            student=student,
-            content=request.data.get('content', ''),
-            file=request.FILES.get('file')
-        )
-        
+            created = True
+
         return Response(
-            AssignmentSubmissionSerializer(submission).data,
-            status=status.HTTP_201_CREATED
+            AssignmentSubmissionSerializer(submission, context={'request': request}).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
         )
 
 
@@ -878,7 +895,7 @@ class CorrectSubmissionView(APIView):
         )
         
         return Response(
-            AssignmentCorrectionSerializer(correction).data,
+            AssignmentCorrectionSerializer(correction, context={'request': request}).data,
             status=status.HTTP_201_CREATED
         )
 
@@ -1056,7 +1073,7 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     def sessions(self, request, pk=None):
         exam = self.get_object()
         qs = ExamSession.objects.filter(exam=exam).select_related('student__user', 'quiz_attempt')
-        return Response(ExamSessionSerializer(qs, many=True).data)
+        return Response(ExamSessionSerializer(qs, many=True, context={'request': request}).data)
 
     @action(detail=True, methods=['get'], url_path='ranking')
     def ranking(self, request, pk=None):
