@@ -1172,6 +1172,8 @@ class ExamSessionSnapshotView(APIView):
             'snapshot_id': str(snapshot.id),
             'face_detected': face_detected,
             'phone_detected': phone_detected,
+            'multiple_faces': analysis['multiple_faces'],
+            'suspicious': analysis['suspicious'],
             'description': analysis['description'],
         })
 
