@@ -367,7 +367,7 @@ class AssignmentListSerializer(serializers.ModelSerializer):
         model = Assignment
         fields = [
             'id', 'title', 'class_obj', 'class_name', 'subject', 'subject_name',
-            'due_date', 'max_score', 'status', 'submission_count', 'submission'
+            'due_date', 'max_score', 'status', 'attachment', 'submission_count', 'submission'
         ]
 
     def get_submission(self, obj):
