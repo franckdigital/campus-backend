@@ -1,6 +1,8 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Count, Q
@@ -18,6 +20,16 @@ from .serializers import (
     RoomSerializer, SessionSerializer, SemesterSerializer, LevelSubjectSerializer,
     TeacherDocumentSerializer, TeacherExperienceSerializer,
 )
+from .permissions import IsAdminStaffOrOwningTeacher
+
+
+def _teacher_profile_of(request):
+    """None for ADMIN/STAFF (unrestricted); the TeacherProfile for a teacher; None for
+    anyone else too (students never reach here — writes are blocked by permission_classes)."""
+    user = request.user
+    if getattr(user, 'user_type', None) in ('ADMIN', 'STAFF'):
+        return None
+    return getattr(user, 'teacher_profile', None)
 
 
 class SemesterViewSet(viewsets.ModelViewSet):
@@ -479,6 +491,7 @@ class SessionViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['day_of_week', 'start_time']
     filterset_fields = ['subject', 'room', 'day_of_week', 'is_active', 'semester']
+    permission_classes = [IsAuthenticated, IsAdminStaffOrOwningTeacher]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -506,6 +519,54 @@ class SessionViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    def _check_no_overlap(self, teacher, day_of_week, start_time, end_time, exclude_id=None):
+        qs = Session.objects.filter(
+            teacher=teacher, day_of_week=day_of_week, is_active=True,
+            start_time__lt=end_time, end_time__gt=start_time,
+        )
+        if exclude_id:
+            qs = qs.exclude(id=exclude_id)
+        clash = qs.select_related('subject').first()
+        if clash:
+            raise ValidationError({'detail':
+                f"Ce créneau chevauche un cours déjà planifié ({clash.subject.code} "
+                f"{clash.start_time.strftime('%H:%M')}-{clash.end_time.strftime('%H:%M')})."
+            })
+
+    def perform_create(self, serializer):
+        teacher = _teacher_profile_of(self.request)
+        if teacher is None:
+            serializer.save()
+            return
+
+        class_obj = serializer.validated_data.get('class_obj')
+        subject = serializer.validated_data.get('subject')
+        if not ClassSubjectTeacher.objects.filter(
+            teacher=teacher, class_obj=class_obj, subject=subject, is_active=True
+        ).exists():
+            raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
+
+        self._check_no_overlap(
+            teacher,
+            serializer.validated_data.get('day_of_week'),
+            serializer.validated_data.get('start_time'),
+            serializer.validated_data.get('end_time'),
+        )
+        serializer.save(teacher=teacher)
+
+    def perform_update(self, serializer):
+        teacher = _teacher_profile_of(self.request)
+        if teacher is None:
+            serializer.save()
+            return
+
+        instance = serializer.instance
+        day_of_week = serializer.validated_data.get('day_of_week', instance.day_of_week)
+        start_time = serializer.validated_data.get('start_time', instance.start_time)
+        end_time = serializer.validated_data.get('end_time', instance.end_time)
+        self._check_no_overlap(teacher, day_of_week, start_time, end_time, exclude_id=instance.id)
+        serializer.save(teacher=teacher)
+
 
 class LevelSubjectViewSet(viewsets.ModelViewSet):
     queryset = LevelSubject.objects.select_related('level__program', 'subject').all()
@@ -524,17 +585,55 @@ class ClassSubjectTeacherViewSet(viewsets.ModelViewSet):
     filterset_fields = ['class_obj', 'subject', 'teacher', 'is_active']
     search_fields = ['teacher__user__first_name', 'teacher__user__last_name', 'subject__name', 'class_obj__name']
     ordering_fields = ['created_at']
+    permission_classes = [IsAuthenticated, IsAdminStaffOrOwningTeacher]
+
+    def _allowed_site_ids(self, teacher):
+        """Sites this teacher may self-assign classes in. Empty set = unknown
+        (no TeacherSite row and no existing assignment yet) => don't restrict,
+        rather than silently blocking a teacher's very first self-assignment."""
+        site_ids = set(TeacherSite.objects.filter(teacher=teacher).values_list('site_id', flat=True))
+        site_ids |= set(
+            ClassSubjectTeacher.objects.filter(teacher=teacher).values_list('class_obj__site_id', flat=True)
+        )
+        return site_ids
 
     def create(self, request, *args, **kwargs):
-        # Idempotent: update teacher if assignment already exists for class+subject
         class_obj_id = request.data.get('class_obj')
         subject_id = request.data.get('subject')
-        teacher_id = request.data.get('teacher')
-        obj, created = ClassSubjectTeacher.objects.update_or_create(
-            class_obj_id=class_obj_id,
-            subject_id=subject_id,
-            defaults={'teacher_id': teacher_id, 'is_active': True}
+        teacher = _teacher_profile_of(request)
+
+        if teacher is None:
+            # Admin/staff: idempotent update-or-create, unchanged.
+            teacher_id = request.data.get('teacher')
+            obj, created = ClassSubjectTeacher.objects.update_or_create(
+                class_obj_id=class_obj_id,
+                subject_id=subject_id,
+                defaults={'teacher_id': teacher_id, 'is_active': True}
+            )
+            serializer = self.get_serializer(obj)
+            st = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            return Response(serializer.data, status=st)
+
+        # Teacher self-service: never silently reassign another teacher's slot.
+        allowed_sites = self._allowed_site_ids(teacher)
+        if allowed_sites:
+            class_obj = Class.objects.filter(id=class_obj_id).first()
+            if class_obj and class_obj.site_id not in allowed_sites:
+                raise ValidationError({'detail': "Cette classe n'appartient pas à votre site."})
+
+        existing = ClassSubjectTeacher.objects.filter(
+            class_obj_id=class_obj_id, subject_id=subject_id, is_active=True
+        ).select_related('teacher__user').first()
+        if existing:
+            if existing.teacher_id == teacher.id:
+                serializer = self.get_serializer(existing)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            raise ValidationError({'detail':
+                f"Cette matière est déjà enseignée par {existing.teacher.user.full_name} pour cette classe."
+            })
+
+        obj = ClassSubjectTeacher.objects.create(
+            class_obj_id=class_obj_id, subject_id=subject_id, teacher=teacher, is_active=True,
         )
         serializer = self.get_serializer(obj)
-        st = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-        return Response(serializer.data, status=st)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
