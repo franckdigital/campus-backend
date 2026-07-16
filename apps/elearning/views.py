@@ -676,6 +676,21 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ['quiz', 'student', 'is_passed', 'is_graded']
     tuition_gate_actions = ('submit',)
 
+    def _sync_exam_session(self, attempt):
+        """Keep the linked secure-exam session in sync — without this, ExamSession.status
+        never leaves STARTED, so "completed exams" lists never show it and the
+        anti-cheat auto-submit never actually closes the session."""
+        try:
+            exam_session = attempt.exam_session
+        except ExamSession.DoesNotExist:
+            exam_session = None
+        if exam_session and exam_session.status == 'STARTED':
+            from django.utils import timezone as tz
+            exam_session.status = 'SUBMITTED'
+            exam_session.submitted_at = exam_session.submitted_at or tz.now()
+            exam_session.save(update_fields=['status', 'submitted_at'])
+            exam_session.check_webcam_integrity()
+
     @action(detail=True, methods=['post'], url_path='grade-text')
     def grade_text(self, request, pk=None):
         """Lot 11 — Manually grade a TEXT answer."""
@@ -694,6 +709,7 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         answer.manual_feedback = feedback
         answer.save()
         attempt.finalize()
+        self._sync_exam_session(attempt)
         return Response({'status': 'graded', 'attempt_percent': float(attempt.percent), 'is_passed': attempt.is_passed})
 
     @action(detail=True, methods=['post'])
@@ -739,19 +755,7 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             if progress:
                 progress.evaluate_completion()
 
-        # Keep the linked secure-exam session in sync — without this, ExamSession.status
-        # never leaves STARTED, so "completed exams" lists never show it and the
-        # anti-cheat auto-submit never actually closes the session.
-        try:
-            exam_session = attempt.exam_session
-        except ExamSession.DoesNotExist:
-            exam_session = None
-        if exam_session and exam_session.status == 'STARTED':
-            from django.utils import timezone as tz
-            exam_session.status = 'SUBMITTED'
-            exam_session.submitted_at = exam_session.submitted_at or tz.now()
-            exam_session.save(update_fields=['status', 'submitted_at'])
-            exam_session.check_webcam_integrity()
+        self._sync_exam_session(attempt)
 
         # Re-fetch from DB so serializer gets fresh graded answers (not stale prefetch)
         fresh = QuizAttempt.objects.prefetch_related(
