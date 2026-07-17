@@ -1165,7 +1165,8 @@ class ExamSessionSnapshotView(APIView):
         snapshot.ai_analysis    = analysis['description']
         snapshot.save()
 
-        if not face_detected or phone_detected or analysis['multiple_faces'] or analysis['suspicious']:
+        if (not face_detected or phone_detected or analysis['multiple_faces']
+                or analysis['suspicious'] or analysis['looking_away']):
             session.log_event('AI_FLAG', analysis['description'])
 
         return Response({
@@ -1174,6 +1175,8 @@ class ExamSessionSnapshotView(APIView):
             'phone_detected': phone_detected,
             'multiple_faces': analysis['multiple_faces'],
             'suspicious': analysis['suspicious'],
+            'looking_away': analysis['looking_away'],
+            'gaze_direction': analysis['gaze_direction'],
             'description': analysis['description'],
         })
 

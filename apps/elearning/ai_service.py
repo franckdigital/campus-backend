@@ -150,6 +150,8 @@ def _gemini_stub_result(reason: str) -> dict:
         'phone_detected': False,
         'multiple_faces': False,
         'suspicious': False,
+        'looking_away': False,
+        'gaze_direction': 'aucun',
     }
 
 
@@ -186,7 +188,11 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
         "tient un téléphone ou un objet devant son visage\", \"Aucune anomalie, l'étudiant "
         "regarde son écran normalement\". En cas de doute sur la présence d'un téléphone ou d'un "
         "objet tenu en main, signale-le plutôt que de l'ignorer (mieux vaut un faux positif "
-        "qu'une fraude manquée)."
+        "qu'une fraude manquée). Regarde aussi où pointe le regard/la tête de l'étudiant : un "
+        "regard bref vers le clavier ou le bas de l'écran est normal, mais un regard clairement "
+        "détourné et soutenu — vers le haut (au plafond), la gauche, la droite, ou carrément "
+        "retourné vers l'arrière/le côté (comme pour regarder quelqu'un ou quelque chose hors "
+        "champ) — doit être signalé avec la direction observée."
     )
     response_schema = {
         'type': 'OBJECT',
@@ -196,8 +202,13 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
             'phone_detected':  {'type': 'BOOLEAN'},
             'multiple_faces':  {'type': 'BOOLEAN'},
             'suspicious':      {'type': 'BOOLEAN'},
+            'looking_away':    {'type': 'BOOLEAN'},
+            'gaze_direction':  {'type': 'STRING', 'enum': ['haut', 'bas', 'gauche', 'droite', 'derriere', 'aucun']},
         },
-        'required': ['description', 'face_detected', 'phone_detected', 'multiple_faces', 'suspicious'],
+        'required': [
+            'description', 'face_detected', 'phone_detected', 'multiple_faces', 'suspicious',
+            'looking_away', 'gaze_direction',
+        ],
     }
     import time
 
@@ -242,6 +253,8 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
                 'phone_detected': parsed.get('phone_detected', False),
                 'multiple_faces': parsed.get('multiple_faces', False),
                 'suspicious': parsed.get('suspicious', False),
+                'looking_away': parsed.get('looking_away', False),
+                'gaze_direction': parsed.get('gaze_direction') or 'aucun',
             }
         except requests.exceptions.HTTPError as e:
             last_error = e
