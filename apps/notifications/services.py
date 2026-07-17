@@ -550,5 +550,83 @@ def retry_failed_logs():
     return count
 
 
+# ──────────────────────────────────────────────────────────────
+# Exam reminder (ReminderConfig, reminder_type='EXAMEN')
+# ──────────────────────────────────────────────────────────────
+
+def send_exam_reminder_config(config, today, force=False):
+    """Send an exam reminder to every active student (+ parents) in this
+    config's site/program/level scope (see ReminderConfig.matches_scope —
+    a None field on the config means "all" for that dimension), for one
+    ReminderConfig(reminder_type='EXAMEN'). Mirrors apps.finance.tasks.
+    _maybe_remind_student: idempotent per config via the most recent
+    Notification tagged data.category=f'exam_reminder_{config.id}', and
+    stops sending once the exam date has passed (unless force=True, used by
+    the "Envoyer maintenant" admin action).
+    """
+    from apps.students.models import Student, get_student_org_scope
+
+    if not force and config.exam_date and today > config.exam_date:
+        return 0
+
+    category = f'exam_reminder_{config.id}'
+
+    if not force:
+        last = Notification.objects.filter(
+            notification_type='REMINDER', data__category=category,
+        ).order_by('-created_at').first()
+        if last:
+            days_since = (today - last.created_at.date()).days
+            if days_since < (config.exam_reminder_frequency_days or 1):
+                return 0
+
+    days_left = (config.exam_date - today).days if config.exam_date else None
+    title = f"Rappel — Examen {config.exam_type}"
+    date_str = config.exam_date.strftime('%d/%m/%Y') if config.exam_date else ''
+    days_left_str = f" (dans {days_left} jour(s))" if days_left is not None else ""
+
+    sent_count = 0
+    students = Student.objects.filter(is_active=True, status='ACTIVE').select_related('user', 'site')
+    if config.site_id:
+        students = students.filter(site_id=config.site_id)
+
+    for student in students:
+        if config.program_id or config.level_id:
+            site_id, program_id, level_id = get_student_org_scope(student)
+            if not config.matches_scope(site_id, program_id, level_id):
+                continue
+        student_notif = Notification.send(
+            recipient=student.user,
+            notification_type='REMINDER',
+            priority='HIGH',
+            title=title,
+            message=f"L'examen « {config.exam_type} » est prévu le {date_str}{days_left_str}.",
+            data={'category': category, 'reminder_config_id': str(config.id), 'student_id': str(student.id)},
+            action_url='/student/exams',
+            site=student.site,
+        )
+        dispatch_notification(student_notif, channels=['IN_APP', 'PUSH'])
+        sent_count += 1
+
+        for parent_user in _get_student_parents(student):
+            parent_notif = Notification.send(
+                recipient=parent_user,
+                notification_type='REMINDER',
+                priority='HIGH',
+                title=title,
+                message=(
+                    f"{student.user.full_name} — l'examen « {config.exam_type} » "
+                    f"est prévu le {date_str}{days_left_str}."
+                ),
+                data={'category': category, 'reminder_config_id': str(config.id), 'student_id': str(student.id)},
+                action_url='/parent/children',
+                site=student.site,
+            )
+            dispatch_notification(parent_notif, channels=['IN_APP', 'PUSH'])
+            sent_count += 1
+
+    return sent_count
+
+
 # kept for backward-compat
 send_realtime_notification = _send_websocket

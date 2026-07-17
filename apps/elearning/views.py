@@ -131,6 +131,76 @@ class InstructorScopedCourseMixin:
         return qs.filter(**{self.instructor_lookup: self.request.user})
 
 
+class TeacherScopedByRelatedMixin:
+    """Like TeacherScopedContentMixin, but for models that don't carry
+    class_obj/subject directly and are instead scoped through a related
+    object that does (e.g. a Question's parent Quiz, a Choice's parent
+    Question -> Quiz, a LessonAttachment's parent Lesson, an
+    AssignmentSubmission's parent Assignment, a MeetingSegment's parent
+    VirtualClassroom). Set `scope_related_field` to the attribute/FK path
+    leading to that object, using Django's double-underscore lookup syntax
+    for filtering (e.g. 'quiz', 'question__quiz', 'assignment').
+    """
+    scope_related_field = None
+
+    def _teacher_profile(self):
+        user = self.request.user
+        if getattr(user, 'user_type', None) in ('ADMIN', 'STAFF'):
+            return None
+        return getattr(user, 'teacher_profile', None)
+
+    def _related_object(self, obj):
+        target = obj
+        for part in self.scope_related_field.split('__'):
+            target = getattr(target, part)
+        return target
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        teacher = self._teacher_profile()
+        if not teacher:
+            return qs
+        pairs = teacher.class_subjects.filter(is_active=True).values_list('class_obj_id', 'subject_id')
+        prefix = self.scope_related_field + '__'
+        scope = Q()
+        has_scope = False
+        for class_id, subject_id in pairs:
+            scope |= Q(**{prefix + 'class_obj_id': class_id, prefix + 'subject_id': subject_id})
+            has_scope = True
+        if not has_scope:
+            return qs.none()
+        return qs.filter(scope)
+
+    def _check_scope(self, related_obj, teacher):
+        if not teacher.class_subjects.filter(
+            class_obj=related_obj.class_obj, subject=related_obj.subject, is_active=True
+        ).exists():
+            raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
+
+    def perform_create(self, serializer):
+        teacher = self._teacher_profile()
+        if teacher is not None:
+            related_key = self.scope_related_field.split('__')[0]
+            related_obj = serializer.validated_data.get(related_key)
+            if related_obj is not None:
+                for part in self.scope_related_field.split('__')[1:]:
+                    related_obj = getattr(related_obj, part)
+                self._check_scope(related_obj, teacher)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        teacher = self._teacher_profile()
+        if teacher is not None:
+            self._check_scope(self._related_object(serializer.instance), teacher)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        teacher = self._teacher_profile()
+        if teacher is not None:
+            self._check_scope(self._related_object(instance), teacher)
+        instance.delete()
+
+
 class ZoomMeetingViewSet(viewsets.ModelViewSet):
     queryset = ZoomMeeting.objects.select_related('session', 'host', 'created_by').all()
     serializer_class = ZoomMeetingSerializer
@@ -138,8 +208,35 @@ class ZoomMeetingViewSet(viewsets.ModelViewSet):
     ordering_fields = ['start_time']
     filterset_fields = ['session', 'host', 'is_recorded', 'is_active']
 
+    def _teacher_profile(self):
+        user = self.request.user
+        if getattr(user, 'user_type', None) in ('ADMIN', 'STAFF'):
+            return None
+        return getattr(user, 'teacher_profile', None)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        teacher = self._teacher_profile()
+        if not teacher:
+            return qs
+        return qs.filter(session__teacher=teacher)
+
+    def _check_session_owner(self, session):
+        teacher = self._teacher_profile()
+        if teacher is not None and (session is None or session.teacher_id != teacher.id):
+            raise PermissionDenied("Vous n'enseignez pas cette séance.")
+
     def perform_create(self, serializer):
+        self._check_session_owner(serializer.validated_data.get('session'))
         serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._check_session_owner(serializer.instance.session)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._check_session_owner(instance.session)
+        instance.delete()
 
 
 class CreateZoomMeetingView(APIView):
@@ -348,7 +445,7 @@ class LessonViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         return Response(LessonProgressSerializer(progress).data)
 
 
-class ChapterViewSet(viewsets.ModelViewSet):
+class ChapterViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = Chapter.objects.select_related('class_obj', 'subject').prefetch_related('lessons').all()
     serializer_class = ChapterSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
@@ -402,12 +499,13 @@ class LearningPathView(APIView):
         })
 
 
-class LessonAttachmentViewSet(viewsets.ModelViewSet):
+class LessonAttachmentViewSet(TeacherScopedByRelatedMixin, viewsets.ModelViewSet):
     queryset = LessonAttachment.objects.select_related('lesson').all()
     serializer_class = LessonAttachmentSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['order', 'created_at']
     filterset_fields = ['lesson', 'block_type', 'is_active']
+    scope_related_field = 'lesson'
 
     @action(detail=False, methods=['post'])
     def reorder(self, request):
@@ -652,29 +750,32 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         })
 
 
-class QuestionViewSet(viewsets.ModelViewSet):
+class QuestionViewSet(TeacherScopedByRelatedMixin, viewsets.ModelViewSet):
     queryset = Question.objects.select_related('quiz').prefetch_related('choices').all()
     serializer_class = QuestionSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['order']
     filterset_fields = ['quiz', 'quiz__subject', 'question_type', 'is_active']
+    scope_related_field = 'quiz'
 
 
-class ChoiceViewSet(viewsets.ModelViewSet):
+class ChoiceViewSet(TeacherScopedByRelatedMixin, viewsets.ModelViewSet):
     queryset = Choice.objects.select_related('question').all()
     serializer_class = ChoiceSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['order']
     filterset_fields = ['question', 'is_active']
+    scope_related_field = 'question__quiz'
 
 
-class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
+class QuizAttemptViewSet(TeacherScopedByRelatedMixin, viewsets.ReadOnlyModelViewSet):
     queryset = QuizAttempt.objects.select_related('quiz', 'student__user').prefetch_related('answers__question').all()
     serializer_class = QuizAttemptSerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     ordering_fields = ['started_at']
     filterset_fields = ['quiz', 'student', 'is_passed', 'is_graded']
     tuition_gate_actions = ('submit',)
+    scope_related_field = 'quiz'
 
     def _sync_exam_session(self, attempt):
         """Keep the linked secure-exam session in sync — without this, ExamSession.status
@@ -696,6 +797,9 @@ class QuizAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         """Lot 11 — Manually grade a TEXT answer."""
         attempt = self.get_object()
         answer_id  = request.data.get('answer_id')
+        # NB: get_object() already applies get_queryset()'s teacher scoping
+        # (TeacherScopedByRelatedMixin, scope_related_field='quiz'), so a
+        # teacher outside this quiz's class+subject 404s before reaching here.
         is_correct = request.data.get('is_correct', False)
         points     = request.data.get('points_earned', None)
         feedback   = request.data.get('feedback', '')
@@ -792,7 +896,7 @@ class AssignmentViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
+class AssignmentSubmissionViewSet(TeacherScopedByRelatedMixin, viewsets.ModelViewSet):
     queryset = AssignmentSubmission.objects.select_related(
         'assignment', 'student__user'
     ).all()
@@ -801,6 +905,7 @@ class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
     ordering_fields = ['submitted_at']
     filterset_fields = ['assignment', 'student', 'status', 'is_late', 'is_active']
     tuition_gate_actions = ('create',)
+    scope_related_field = 'assignment'
 
 
 class SubmitAssignmentView(APIView):
@@ -870,13 +975,26 @@ class SubmitAssignmentView(APIView):
 class CorrectSubmissionView(APIView):
     def post(self, request, submission_id):
         try:
-            submission = AssignmentSubmission.objects.get(id=submission_id)
+            submission = AssignmentSubmission.objects.select_related('assignment').get(id=submission_id)
         except AssignmentSubmission.DoesNotExist:
             return Response(
                 {'detail': 'Soumission non trouvée'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
+        user = request.user
+        if getattr(user, 'user_type', None) not in ('ADMIN', 'STAFF'):
+            teacher = getattr(user, 'teacher_profile', None)
+            assignment = submission.assignment
+            owns = teacher and (
+                assignment.teacher_id == teacher.id or
+                teacher.class_subjects.filter(
+                    class_obj=assignment.class_obj, subject=assignment.subject, is_active=True
+                ).exists()
+            )
+            if not owns:
+                raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
+
         if hasattr(submission, 'correction'):
             return Response(
                 {'detail': 'Cette soumission a déjà été corrigée'},
@@ -1192,9 +1310,19 @@ class ExamSessionGradeView(APIView):
 
     def post(self, request, session_id):
         try:
-            session = ExamSession.objects.get(id=session_id)
+            session = ExamSession.objects.select_related('exam').get(id=session_id)
         except ExamSession.DoesNotExist:
             return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user
+        if getattr(user, 'user_type', None) not in ('ADMIN', 'STAFF'):
+            teacher = getattr(user, 'teacher_profile', None)
+            exam = session.exam
+            owns = teacher and teacher.class_subjects.filter(
+                class_obj=exam.class_obj, subject=exam.subject, is_active=True
+            ).exists()
+            if not owns:
+                raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
 
         score = request.data.get('score')
         feedback = request.data.get('feedback', '')
@@ -1634,18 +1762,17 @@ class VideoLibraryViewSet(viewsets.ModelViewSet):
 # LOT 8 — CLASSES VIRTUELLES
 # =============================================================================
 
-class VirtualClassroomViewSet(viewsets.ModelViewSet):
+class VirtualClassroomViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
+    queryset = VirtualClassroom.objects.filter(is_active=True)
     serializer_class = VirtualClassroomSerializer
     filter_backends  = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['class_obj', 'subject', 'provider', 'is_ended']
     search_fields    = ['title']
     ordering_fields  = ['start_time', 'created_at']
 
-    def get_queryset(self):
-        return VirtualClassroom.objects.filter(is_active=True)
-
     def perform_create(self, serializer):
         import uuid
+        self._check_teacher_scope(serializer)
         data = serializer.validated_data
         provider = data.get('provider', 'JITSI')
         room_name = data.get('jitsi_room_name') or f"campus-{uuid.uuid4().hex[:8]}"
@@ -1654,6 +1781,10 @@ class VirtualClassroomViewSet(viewsets.ModelViewSet):
             extra['jitsi_room_name'] = room_name
             extra['join_url'] = f"https://meet.jit.si/{room_name}"
         serializer.save(created_by=self.request.user, **extra)
+
+    def perform_update(self, serializer):
+        self._check_teacher_scope(serializer)
+        serializer.save()
 
     @action(detail=True, methods=['post'], url_path='end')
     def end_session(self, request, pk=None):
@@ -1894,14 +2025,25 @@ class VirtualClassroomViewSet(viewsets.ModelViewSet):
         return Response(result)
 
 
-class MeetingSegmentViewSet(viewsets.ModelViewSet):
+class MeetingSegmentViewSet(TeacherScopedByRelatedMixin, viewsets.ModelViewSet):
     serializer_class = MeetingSegmentSerializer
     filter_backends  = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = ['virtual_class', 'status', 'sequence']
     ordering_fields  = ['sequence', 'start_time']
+    scope_related_field = 'virtual_class'
 
     def get_queryset(self):
-        return MeetingSegment.objects.filter(is_active=True)
+        qs = MeetingSegment.objects.filter(is_active=True)
+        teacher = self._teacher_profile()
+        if not teacher:
+            return qs
+        pairs = teacher.class_subjects.filter(is_active=True).values_list('class_obj_id', 'subject_id')
+        scope = Q()
+        has_scope = False
+        for class_id, subject_id in pairs:
+            scope |= Q(virtual_class__class_obj_id=class_id, virtual_class__subject_id=subject_id)
+            has_scope = True
+        return qs.filter(scope) if has_scope else qs.none()
 
     @action(detail=True, methods=['post'], url_path='start')
     def start_segment(self, request, pk=None):

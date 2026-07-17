@@ -224,6 +224,12 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'finance.send_echeancier_reminders',
         'schedule': crontab(hour=8, minute=0),
     },
+    # Rappels d'examens configurés depuis l'admin (Paramètres > Alertes &
+    # Rappels) — voir apps.notifications.tasks.send_exam_reminders.
+    'send-exam-reminders': {
+        'task': 'notifications.send_exam_reminders',
+        'schedule': crontab(hour=8, minute=15),
+    },
 }
 
 # CinetPay Configuration — API v1 "Aurora" (account_key/account_password

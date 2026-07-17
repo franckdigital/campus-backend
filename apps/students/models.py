@@ -262,3 +262,26 @@ class StudentCard(BaseModel):
         import datetime
         year = self.academic_year.code if self.academic_year else datetime.date.today().year
         return f"CARD-{self.student.matricule}-{year}"
+
+
+def get_student_org_scope(student):
+    """Resolve (site_id, program_id, level_id) for a student, from their
+    current active enrollment — same enrollment lookup used by
+    apps.finance.models._resolve_fee_config_for_student, factored out here so
+    apps.notifications' ReminderConfig site/program/level scope matching
+    (échéancier + examens) doesn't duplicate this logic a third time."""
+    site_id = student.site_id
+    program_id = None
+    level_id = None
+    try:
+        from apps.academic.models import Class as AcademicClass
+        class_obj_id = student.enrollments.filter(
+            status='ENROLLED', is_active=True
+        ).order_by('-created_at').values_list('class_obj_id', flat=True).first()
+        if class_obj_id:
+            class_obj = AcademicClass.objects.select_related('level').get(pk=class_obj_id)
+            level_id = class_obj.level_id
+            program_id = class_obj.level.program_id
+    except Exception:
+        pass
+    return site_id, program_id, level_id

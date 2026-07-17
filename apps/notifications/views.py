@@ -7,11 +7,15 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 from django.utils import timezone
 from django.db.models import Count, Q
 
-from .models import Notification, NotificationLog, NotificationPreference, NotificationTemplate
+from .models import (
+    Notification, NotificationLog, NotificationPreference, NotificationTemplate,
+    ReminderConfig,
+)
 from .serializers import (
     NotificationSerializer, NotificationListSerializer,
     NotificationPreferenceSerializer, SendNotificationSerializer,
     NotificationLogSerializer, NotificationTemplateSerializer,
+    ReminderConfigSerializer,
 )
 from .services import dispatch_notification
 
@@ -307,3 +311,49 @@ class NotificationTemplateViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationTemplateSerializer
     filter_backends  = [DjangoFilterBackend]
     filterset_fields = ['event_type', 'channel', 'site', 'is_active']
+
+
+class ReminderConfigViewSet(viewsets.ModelViewSet):
+    """Admin-facing CRUD for échéancier/exam reminder settings, plus a
+    'send-now' action that triggers an immediate send regardless of
+    is_automatic or the configured frequency/timing."""
+    queryset = ReminderConfig.objects.select_related('created_by', 'site', 'program', 'level').all()
+    serializer_class = ReminderConfigSerializer
+    filter_backends  = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['reminder_type', 'is_active', 'is_automatic', 'site', 'program', 'level']
+    ordering_fields  = ['created_at', 'exam_date']
+
+    def perform_create(self, serializer):
+        instance = serializer.save(created_by=self.request.user)
+        self._enforce_single_active_echeancier(instance)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        self._enforce_single_active_echeancier(instance)
+
+    def _enforce_single_active_echeancier(self, instance):
+        # Only one échéancier schedule per exact scope (site+program+level) —
+        # activating one deactivates any other config with that SAME scope,
+        # so apps.finance.tasks._get_echeancier_config always has a single
+        # unambiguous match for a given student. Configs with a different
+        # scope (e.g. one for Site A, another for Site B, or a global
+        # all-sites fallback) coexist without conflict.
+        if instance.reminder_type == 'ECHEANCIER' and instance.is_active:
+            ReminderConfig.objects.filter(
+                reminder_type='ECHEANCIER', is_active=True,
+                site_id=instance.site_id, program_id=instance.program_id, level_id=instance.level_id,
+            ).exclude(pk=instance.pk).update(is_active=False)
+
+    @action(detail=True, methods=['post'], url_path='send-now')
+    def send_now(self, request, pk=None):
+        config = self.get_object()
+        today = timezone.now().date()
+
+        if config.reminder_type == 'ECHEANCIER':
+            from apps.finance.tasks import send_echeancier_reminders
+            count = send_echeancier_reminders(force=True, config=config)
+        else:
+            from .services import send_exam_reminder_config
+            count = send_exam_reminder_config(config, today, force=True)
+
+        return Response({'detail': f'{count} rappel(s) envoyé(s) immédiatement.', 'sent_count': count})

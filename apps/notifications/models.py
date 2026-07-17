@@ -268,3 +268,66 @@ class NotificationPreference(BaseModel):
         if self.whatsapp_enabled and self.whatsapp_number:
             channels.append('WHATSAPP')
         return channels
+
+
+class ReminderConfig(BaseModel):
+    """Admin-configurable reminder settings — échéancier de scolarité and
+    exam reminders. Replaces the constants that used to be hard-coded in
+    apps.finance.tasks (REMINDER_START_DAY/REMINDER_INTERVAL_DAYS)."""
+    TYPE_CHOICES = [
+        ('ECHEANCIER', 'Échéancier'),
+        ('EXAMEN',     'Examen'),
+    ]
+
+    reminder_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    label         = models.CharField(max_length=200, blank=True)
+    is_automatic  = models.BooleanField(default=True)
+    created_by    = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='reminder_configs'
+    )
+
+    # Scope — null on any of these means "all" for that dimension (mirrors
+    # apps.finance.models.FeeConfiguration's site/program/level fields).
+    # A student matches this config when every set field equals theirs
+    # (see matches_scope) — see apps.students.models.get_student_org_scope
+    # for how a student's own site/program/level is resolved.
+    site    = models.ForeignKey(Site, on_delete=models.SET_NULL, null=True, blank=True, related_name='reminder_configs')
+    program = models.ForeignKey('academic.Program', on_delete=models.SET_NULL, null=True, blank=True, related_name='reminder_configs')
+    level   = models.ForeignKey('academic.Level', on_delete=models.SET_NULL, null=True, blank=True, related_name='reminder_configs')
+
+    # ECHEANCIER — jour du mois de démarrage, fréquence en jours, et une
+    # date limite au-delà de laquelle les rappels automatiques s'arrêtent.
+    echeancier_start_day      = models.PositiveSmallIntegerField(null=True, blank=True)
+    echeancier_frequency_days = models.PositiveSmallIntegerField(null=True, blank=True)
+    echeancier_deadline_date  = models.DateField(null=True, blank=True)
+
+    # EXAMEN — entrée manuelle indépendante du module notes (pas de lien
+    # avec apps.grades.models.Evaluation).
+    exam_type = models.CharField(max_length=100, blank=True)
+    exam_date = models.DateField(null=True, blank=True)
+    exam_reminder_frequency_days = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'reminder_configs'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.get_reminder_type_display()} – {self.label or self.id}"
+
+    def matches_scope(self, site_id, program_id, level_id):
+        """A None field on this config matches anything (= "tous")."""
+        if self.site_id and self.site_id != site_id:
+            return False
+        if self.program_id and self.program_id != program_id:
+            return False
+        if self.level_id and self.level_id != level_id:
+            return False
+        return True
+
+    @property
+    def scope_specificity(self):
+        """Number of scope dimensions this config restricts — used to pick
+        the most specific match when several configs could apply to the
+        same student (mirrors FeeConfiguration's site>program>level tiers)."""
+        return sum(1 for f in (self.site_id, self.program_id, self.level_id) if f)

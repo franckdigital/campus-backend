@@ -1,5 +1,8 @@
 from rest_framework import serializers
-from .models import Notification, NotificationLog, NotificationPreference, NotificationTemplate
+from .models import (
+    Notification, NotificationLog, NotificationPreference, NotificationTemplate,
+    ReminderConfig,
+)
 
 
 class NotificationTemplateSerializer(serializers.ModelSerializer):
@@ -88,4 +91,46 @@ class SendNotificationSerializer(serializers.Serializer):
     def validate(self, data):
         if not data.get('recipient_id') and not data.get('recipient_ids') and not data.get('role'):
             raise serializers.ValidationError('recipient_id, recipient_ids ou role est requis')
+        return data
+
+
+class ReminderConfigSerializer(serializers.ModelSerializer):
+    reminder_type_display = serializers.CharField(source='get_reminder_type_display', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.full_name', read_only=True, default=None)
+    site_name    = serializers.CharField(source='site.name', read_only=True, default=None)
+    program_name = serializers.CharField(source='program.name', read_only=True, default=None)
+    level_name   = serializers.CharField(source='level.name', read_only=True, default=None)
+
+    class Meta:
+        model = ReminderConfig
+        fields = [
+            'id', 'reminder_type', 'reminder_type_display', 'label',
+            'is_active', 'is_automatic',
+            'site', 'site_name', 'program', 'program_name', 'level', 'level_name',
+            'echeancier_start_day', 'echeancier_frequency_days', 'echeancier_deadline_date',
+            'exam_type', 'exam_date', 'exam_reminder_frequency_days',
+            'created_by', 'created_by_name', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+    def validate(self, data):
+        rtype = data.get('reminder_type', getattr(self.instance, 'reminder_type', None))
+
+        def current(field):
+            return data.get(field, getattr(self.instance, field, None))
+
+        errors = {}
+        if rtype == 'ECHEANCIER':
+            for field in ('echeancier_start_day', 'echeancier_frequency_days'):
+                if not current(field):
+                    errors[field] = 'Requis pour un rappel Échéancier.'
+        elif rtype == 'EXAMEN':
+            for field in ('exam_type', 'exam_date', 'exam_reminder_frequency_days'):
+                if not current(field):
+                    errors[field] = 'Requis pour un rappel Examen.'
+        else:
+            errors['reminder_type'] = 'Type invalide.'
+
+        if errors:
+            raise serializers.ValidationError(errors)
         return data

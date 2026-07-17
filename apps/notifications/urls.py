@@ -4,6 +4,7 @@ from .views import (
     NotificationViewSet, NotificationPreferenceViewSet,
     NotificationLogViewSet, NotificationTemplateViewSet,
     SendNotificationView, NotificationStatsView, RegisterDeviceView,
+    ReminderConfigViewSet,
 )
 
 router = DefaultRouter()
@@ -11,6 +12,7 @@ router.register(r'notifications',             NotificationViewSet,           bas
 router.register(r'notification-preferences',  NotificationPreferenceViewSet, basename='notification-preference')
 router.register(r'notification-logs',         NotificationLogViewSet,        basename='notification-log')
 router.register(r'notification-templates',    NotificationTemplateViewSet,   basename='notification-template')
+router.register(r'reminder-configs',          ReminderConfigViewSet,         basename='reminder-config')
 
 urlpatterns = [
     path('notifications/send/',            SendNotificationView.as_view(),  name='send-notification'),

@@ -198,12 +198,13 @@ class AttemptAnswerReviewSerializer(serializers.ModelSerializer):
 
 class QuizAttemptSerializer(serializers.ModelSerializer):
     quiz_title = serializers.CharField(source='quiz.title', read_only=True)
+    student_name = serializers.CharField(source='student.user.full_name', read_only=True, default=None)
     answers = AttemptAnswerReviewSerializer(many=True, read_only=True)
 
     class Meta:
         model = QuizAttempt
         fields = [
-            'id', 'quiz', 'quiz_title', 'student', 'started_at', 'submitted_at',
+            'id', 'quiz', 'quiz_title', 'student', 'student_name', 'started_at', 'submitted_at',
             'score', 'max_score', 'percent', 'is_passed', 'is_graded', 'answers'
         ]
         read_only_fields = ['id', 'started_at', 'score', 'max_score', 'percent', 'is_passed', 'is_graded']
