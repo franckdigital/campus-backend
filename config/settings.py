@@ -15,6 +15,18 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,10.0.2.2,*').split(',')
 
+# In production this app sits behind an HTTPS-terminating reverse proxy
+# (nginx) that forwards to Gunicorn/Daphne over plain HTTP — without this,
+# request.is_secure()/build_absolute_uri() can't tell the original request
+# was HTTPS and emit http:// URLs for every absolute link the API builds
+# (file/image fields via request.build_absolute_uri, the teacher fiche link,
+# etc). Android blocks that cleartext traffic by default, so anything built
+# from those URLs (e.g. exam webcam snapshot images) silently fails to load
+# on mobile while still "working" in a browser, which just warns instead of
+# blocking. Relies on nginx setting X-Forwarded-Proto, which is the standard
+# convention.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 # Application definition
 DJANGO_APPS = [
     'daphne',

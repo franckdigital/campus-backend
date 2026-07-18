@@ -32,6 +32,21 @@ def _teacher_profile_of(request):
     return getattr(user, 'teacher_profile', None)
 
 
+def _check_teacher_self_or_admin(request, teacher):
+    """TeacherViewSet's queryset/actions (update, experiences, documents) have
+    no built-in ownership scoping — any authenticated teacher could otherwise
+    edit another teacher's profile, or add/delete another teacher's
+    experiences/documents, by just changing the :pk in the URL. Only matters
+    now that a real teacher-facing client (mobile "Mon profil") talks to
+    these; the admin UI never had a reason to hit someone else's id."""
+    user = request.user
+    if getattr(user, 'user_type', None) in ('ADMIN', 'STAFF'):
+        return
+    requester_teacher = getattr(user, 'teacher_profile', None)
+    if not requester_teacher or requester_teacher.id != teacher.id:
+        raise PermissionDenied("Vous ne pouvez modifier que votre propre profil enseignant.")
+
+
 class SemesterViewSet(viewsets.ModelViewSet):
     queryset = Semester.objects.select_related('academic_year').all()
     serializer_class = SemesterSerializer
@@ -126,6 +141,14 @@ class TeacherViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return TeacherProfileCreateSerializer
         return TeacherProfileSerializer
+
+    def perform_update(self, serializer):
+        _check_teacher_self_or_admin(self.request, serializer.instance)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        _check_teacher_self_or_admin(self.request, instance)
+        instance.delete()
 
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
@@ -367,6 +390,7 @@ class TeacherViewSet(viewsets.ModelViewSet):
         if request.method == 'GET':
             exps = teacher.experiences.all()
             return Response(TeacherExperienceSerializer(exps, many=True).data)
+        _check_teacher_self_or_admin(request, teacher)
         serializer = TeacherExperienceSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(teacher=teacher)
@@ -376,6 +400,7 @@ class TeacherViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['delete'], url_path='experiences/(?P<exp_id>[^/.]+)')
     def delete_experience(self, request, pk=None, exp_id=None):
         teacher = self.get_object()
+        _check_teacher_self_or_admin(request, teacher)
         try:
             exp = teacher.experiences.get(pk=exp_id)
         except TeacherExperience.DoesNotExist:
@@ -392,6 +417,7 @@ class TeacherViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
 
         # POST — upload a new document
+        _check_teacher_self_or_admin(request, teacher)
         serializer = TeacherDocumentSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             serializer.save(teacher=teacher, uploaded_by=request.user)
@@ -401,6 +427,7 @@ class TeacherViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['delete'], url_path='documents/(?P<doc_id>[^/.]+)')
     def delete_document(self, request, pk=None, doc_id=None):
         teacher = self.get_object()
+        _check_teacher_self_or_admin(request, teacher)
         try:
             doc = teacher.documents.get(pk=doc_id)
         except TeacherDocument.DoesNotExist:
