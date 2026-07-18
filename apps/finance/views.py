@@ -213,7 +213,12 @@ class PaymentViewSet(viewsets.ModelViewSet):
             # A student may only ever see their own payments — ignore/override
             # any ?student= query param rather than trusting it.
             return qs.filter(invoice__student__user=self.request.user)
-        student = self.request.query_params.get('student')
+        # Accept both `?student=` and the `?invoice__student=` lookup-style
+        # param some frontend call sites used — the latter isn't a real
+        # django-filter field (filterset_fields lists `invoice`, not
+        # `invoice__student`), so it was silently dropped and the endpoint
+        # fell through to "no student filter" = every payment in the system.
+        student = self.request.query_params.get('student') or self.request.query_params.get('invoice__student')
         if student:
             qs = qs.filter(invoice__student_id=student)
         # Payment has no direct site FK — not in filterset_fields, so a

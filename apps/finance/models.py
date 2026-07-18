@@ -726,7 +726,14 @@ class FeeConfiguration(BaseModel):
         qs = cls.objects.filter(is_active=True, fee_category=fee_category)
 
         def _first(**filters):
-            return qs.filter(**filters).first()
+            # Meta.ordering (site/program/level/fee_category) never actually
+            # disambiguates here — every one of those fields is already held
+            # constant by the **filters for a given tier, so two rows tied on
+            # all of them (e.g. a duplicate/leftover barème row for the same
+            # site+level+modality+affectation) fall back to MySQL's
+            # unspecified tie order. -created_at makes "most recently
+            # configured wins" explicit instead of arbitrary.
+            return qs.filter(**filters).order_by('-created_at').first()
 
         # ── Level-scoped tiers — tried with year then without, most exact
         # combo first, relaxing modality and/or affectation one at a time ──
@@ -889,6 +896,27 @@ class FeeInstallment(BaseModel):
         super().save(*args, **kwargs)
 
 
+def resolve_current_enrollment(student):
+    """The single source of truth for "which Enrollment row is this
+    student's CURRENT class" — status=ENROLLED, is_active=True, most recent
+    by created_at. Returns (class_obj_id, academic_year_id) or None.
+
+    Enrollment has no Meta.ordering and its id is a random uuid4 (not
+    time-sortable) — an unordered `.first()` silently resolves to whichever
+    row happens to sort lowest by UUID byte value, not the most recent one.
+    Nothing in the enrollment flows (re-enrollment into a new
+    programme/year, admin "inscrire" forms, invoice auto-creation) closes
+    out a student's previous active Enrollment, so a re-enrolled student can
+    easily have two ENROLLED+active rows at once (e.g. last year's BTS and
+    this year's Licence 1) — resolving the wrong one silently prices their
+    invoices off a stale programme's barème. Shared by
+    ensure_student_invoices, _resolve_fee_config_for_student and
+    financial_summary so they can never disagree with each other again."""
+    return student.enrollments.filter(
+        status='ENROLLED', is_active=True
+    ).order_by('-created_at').values_list('class_obj_id', 'academic_year_id').first()
+
+
 def _resolve_fee_config_for_student(student, academic_year=None):
     """Shared level-resolution used by both compute_tuition_schedule_status
     and get_student_installment_schedule, so they can never drift apart.
@@ -907,9 +935,7 @@ def _resolve_fee_config_for_student(student, academic_year=None):
     resolved_academic_year = academic_year
     try:
         from apps.academic.models import Class as AcademicClass
-        enrollment_row = student.enrollments.filter(
-            status='ENROLLED', is_active=True
-        ).order_by('-created_at').values_list('class_obj_id', 'academic_year_id').first()
+        enrollment_row = resolve_current_enrollment(student)
         if enrollment_row:
             class_obj_id, academic_year_id = enrollment_row
             if class_obj_id:
@@ -1091,9 +1117,7 @@ def ensure_student_invoices(student, created_by=None):
     if not site:
         return 0, Invoice.objects.none()
 
-    enrollment_row = student.enrollments.filter(is_active=True).values_list(
-        'class_obj_id', 'academic_year_id'
-    ).first()
+    enrollment_row = resolve_current_enrollment(student)
     level = None
     try:
         if enrollment_row and enrollment_row[0]:

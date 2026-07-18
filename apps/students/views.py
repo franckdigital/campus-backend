@@ -326,7 +326,7 @@ class StudentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='financial-summary')
     def financial_summary(self, request, pk=None):
         """Compute real financial totals from invoices, with FeeConfiguration as fallback."""
-        from apps.finance.models import Invoice, Payment, FeeConfiguration
+        from apps.finance.models import Invoice, Payment, FeeConfiguration, resolve_current_enrollment
         from django.db.models import Sum
 
         student = self.get_object()
@@ -368,12 +368,10 @@ class StudentViewSet(viewsets.ModelViewSet):
         configured_tuition = float(student.tuition_fee or 0)
         configured_registration = float(student.registration_fee or 0)
         try:
-            # Use values_list to avoid cross-table JOINs (collation-safe)
-            enrollment_row = student.enrollments.filter(
-                is_active=True
-            ).order_by('-created_at').values_list(
-                'class_obj_id', 'academic_year_id'
-            ).first()
+            # Same resolver as ensure_student_invoices/_resolve_fee_config_for_student
+            # (apps.finance.models) — status=ENROLLED + most-recent, so this can never
+            # again disagree with which barème actually priced the student's invoices.
+            enrollment_row = resolve_current_enrollment(student)
             level = None
             academic_year = None
             if enrollment_row:
