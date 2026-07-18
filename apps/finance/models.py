@@ -924,6 +924,25 @@ def _resolve_fee_config_for_student(student, academic_year=None):
     )
 
 
+def _scolarite_amount_paid(student):
+    """Sum of amount_paid across only the student's SCOLARITE invoice(s) —
+    NOT every invoice they have. A student normally has a separate
+    INSCRIPTION invoice (paid in full at inscription, no installment plan)
+    alongside their SCOLARITE one; without this scope, that inscription
+    payment (or any other non-tuition invoice) was silently added into the
+    échéancier's "amount paid" figure, understating the real tuition
+    shortfall shown in the échéancier reminder and the dossier's tranche
+    breakdown (e.g. two tranches totalling 800 000 with only 100 000 paid
+    toward scolarité and 500 000 paid toward inscription was reported as a
+    200 000 balance instead of the real 700 000). Shared by
+    compute_tuition_schedule_status and get_student_installment_schedule so
+    they can't drift apart again."""
+    from django.db.models import Sum
+    return Invoice.objects.filter(
+        student=student, is_active=True, items__fee_type__code='SCOLARITE',
+    ).exclude(status='CANCELLED').distinct().aggregate(s=Sum('amount_paid'))['s'] or 0
+
+
 def compute_tuition_schedule_status(student, academic_year=None):
     """Single source of truth for a student's échéancier compliance — called
     by the elearning permission gate, financial_summary, EnrollmentSerializer
@@ -960,9 +979,7 @@ def compute_tuition_schedule_status(student, academic_year=None):
     cumulative_due = installments.filter(due_date__lte=grace_cutoff).aggregate(
         s=Sum('amount'))['s'] or 0
 
-    cumulative_paid = Invoice.objects.filter(
-        student=student, is_active=True
-    ).exclude(status='CANCELLED').aggregate(s=Sum('amount_paid'))['s'] or 0
+    cumulative_paid = _scolarite_amount_paid(student)
 
     result['cumulative_due'] = cumulative_due
     result['cumulative_paid'] = cumulative_paid
@@ -984,7 +1001,6 @@ def get_student_installment_schedule(student, academic_year=None):
     is one of PAYE / PARTIEL / EN_RETARD / A_VENIR.
     """
     from datetime import timedelta
-    from django.db.models import Sum
     from django.utils import timezone
 
     result = {'has_schedule': False, 'total': 0, 'cumulative_paid': 0, 'installments': []}
@@ -1002,9 +1018,7 @@ def get_student_installment_schedule(student, academic_year=None):
     today = timezone.now().date()
     grace_cutoff = today - timedelta(days=5)
 
-    cumulative_paid = Invoice.objects.filter(
-        student=student, is_active=True
-    ).exclude(status='CANCELLED').aggregate(s=Sum('amount_paid'))['s'] or 0
+    cumulative_paid = _scolarite_amount_paid(student)
     result['cumulative_paid'] = cumulative_paid
 
     running_due = 0
