@@ -704,74 +704,77 @@ class FeeConfiguration(BaseModel):
         modality + affectation status + fee_category (INSCRIPTION/SCOLARITE
         — always required, since the two are now separate barème rows).
 
-        Modality and affectation are both matched strictly in the most-
-        specific tiers (an affected/state-assigned student's fee genuinely
-        differs from a private-track one, same as présentiel/e-learning), then
-        relaxed one at a time — modality first (at each level/program depth),
-        then affectation, then modality+affectation together — mirroring how
-        site/level/program already relax from most to least specific.
+        Level/program is the primary key a school actually thinks in terms
+        of ("le barème de Licence 1 Gestion Commerciale") — modality and
+        affectation are refinements on top of it, tried in every combination
+        (both exact, modality-only relaxed, affectation-only relaxed, both
+        relaxed) before level/program itself is ever given up on. Only once
+        no barème at all exists for that level/program does resolution fall
+        back to a site-wide or global default.
 
-        The modality-relaxed tiers exist because schools commonly enter one
-        barème per niveau scoped to a single modality (historically
-        PRESENTIEL) without realizing that leaves ELEARNING/HYBRIDE students
-        at that same niveau matching nothing at all — better to reuse the
-        level-accurate amount from another modality than to silently return
-        no barème (which surfaces to students/admins as a blank "Scolarité"
-        status). An exact modality match is always tried first and wins.
+        Without every one of those relaxed combinations, a school that only
+        entered ONE barème row per niveau (a single modality/affectation
+        combo, since that's usually all they have at first) leaves any newly
+        enrolled student whose modality or affectation doesn't happen to match
+        that exact combo resolving to NO barème at all — Inscription/Scolarité
+        show up "Non configuré" even though the level/program clearly has a
+        barème configured. Reusing the level-accurate amount regardless of
+        modality/affectation is far more useful than silently returning
+        nothing (which is what a blank "Scolarité" status looks like to
+        students/admins).
         """
         qs = cls.objects.filter(is_active=True, fee_category=fee_category)
-        # Most specific: site + modality + affectation + level + year
-        if academic_year:
-            cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
-                             level=level, academic_year=academic_year).first()
-            if cfg:
-                return cfg
-        # site + modality + affectation + level (any year)
-        cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
-                         level=level, academic_year=None).first()
-        if cfg:
-            return cfg
-        # site + affectation + level, any modality — see docstring
+
+        def _first(**filters):
+            return qs.filter(**filters).first()
+
+        # ── Level-scoped tiers — tried with year then without, most exact
+        # combo first, relaxing modality and/or affectation one at a time ──
         if level:
-            if academic_year:
-                cfg = qs.filter(site=site, affectation_status=affectation_status,
-                                 level=level, academic_year=academic_year).first()
+            level_filters = [
+                dict(modality=modality, affectation_status=affectation_status),  # exact
+                dict(affectation_status=affectation_status),                     # any modality
+                dict(modality=modality),                                         # any affectation
+                dict(),                                                          # any modality, any affectation
+            ]
+            for extra in level_filters:
+                if academic_year:
+                    cfg = _first(site=site, level=level, academic_year=academic_year, **extra)
+                    if cfg:
+                        return cfg
+                cfg = _first(site=site, level=level, academic_year=None, **extra)
                 if cfg:
                     return cfg
-            cfg = qs.filter(site=site, affectation_status=affectation_status,
-                             level=level, academic_year=None).first()
+
+        # ── Program-scoped tiers (level=None rows) — same relaxation order,
+        # used when no level-specific barème exists at all ──────────────────
+        program_id = level.program_id if level else None
+        if program_id:
+            program_filters = [
+                dict(modality=modality, affectation_status=affectation_status),
+                dict(affectation_status=affectation_status),
+                dict(modality=modality),
+                dict(),
+            ]
+            for extra in program_filters:
+                cfg = _first(site=site, program_id=program_id, level=None, **extra)
+                if cfg:
+                    return cfg
+
+        # ── Site-wide (no level, no program) — same relaxation order ────────
+        site_filters = [
+            dict(modality=modality, affectation_status=affectation_status),
+            dict(affectation_status=affectation_status),
+            dict(modality=modality),
+            dict(),
+        ]
+        for extra in site_filters:
+            cfg = _first(site=site, level=None, program=None, **extra)
             if cfg:
                 return cfg
-        # site + modality + affectation + program
-        if level and level.program_id:
-            cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
-                             program_id=level.program_id, level=None).first()
-            if cfg:
-                return cfg
-            # site + affectation + program, any modality
-            cfg = qs.filter(site=site, affectation_status=affectation_status,
-                             program_id=level.program_id, level=None).first()
-            if cfg:
-                return cfg
-        # site + modality + affectation only
-        cfg = qs.filter(site=site, modality=modality, affectation_status=affectation_status,
-                         level=None, program=None).first()
-        if cfg:
-            return cfg
-        # site + affectation only, any modality
-        cfg = qs.filter(site=site, affectation_status=affectation_status, level=None, program=None).first()
-        if cfg:
-            return cfg
-        # site + modality only (any affectation)
-        cfg = qs.filter(site=site, modality=modality, affectation_status=None, level=None, program=None).first()
-        if cfg:
-            return cfg
-        # site only (any modality, any affectation)
-        cfg = qs.filter(site=site, modality=None, affectation_status=None, level=None, program=None).first()
-        if cfg:
-            return cfg
-        # global fallback (any modality, any affectation)
-        return qs.filter(site=None, modality=None, affectation_status=None, level=None, program=None).first()
+
+        # ── Global fallback (no site either) ─────────────────────────────────
+        return _first(site=None, level=None, program=None)
 
 
 def recalculate_invoices_for_fee_config(fee_config, old_amount):
