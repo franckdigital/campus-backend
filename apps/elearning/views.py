@@ -1247,9 +1247,20 @@ class ExamSessionSnapshotView(APIView):
 
     def get(self, request, session_id):
         try:
-            session = ExamSession.objects.get(id=session_id)
+            session = ExamSession.objects.select_related('exam').get(id=session_id)
         except ExamSession.DoesNotExist:
             return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user
+        if getattr(user, 'user_type', None) not in ('ADMIN', 'STAFF'):
+            teacher = getattr(user, 'teacher_profile', None)
+            exam = session.exam
+            owns = teacher and teacher.class_subjects.filter(
+                class_obj=exam.class_obj, subject=exam.subject, is_active=True
+            ).exists()
+            if not owns:
+                raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
+
         snapshots = session.snapshots.all()
         return Response(ExamSnapshotSerializer(snapshots, many=True, context={'request': request}).data)
 

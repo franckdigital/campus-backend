@@ -70,15 +70,23 @@ class Command(BaseCommand):
             self.stdout.write(f"  Tokens connectés (contenu complet) : {len(logged_in)}")
             self.stdout.write(f"  Tokens déconnectés (contenu générique) : {len(logged_out)}")
 
-            success, failed = push_to_user(
+            success, failed, tickets = push_to_user(
                 user, 'TEST diagnose_push_logout',
                 'Ceci est un test de diagnostic — ignorez ce message.',
                 data={'category': 'diagnostic_test'},
             )
-            self.stdout.write(self.style.SUCCESS(f'  -> {success} envoi(s) réussi(s)') if success
-                               else self.style.ERROR('  -> 0 envoi réussi'))
+            self.stdout.write(self.style.SUCCESS(f'  -> {success} ticket(s) accepté(s) par Expo') if success
+                               else self.style.ERROR('  -> 0 ticket accepté'))
+            self.stdout.write(self.style.WARNING(
+                "  (Un ticket accepté ne veut pas dire livré — voir check_expo_receipts "
+                "pour le vrai statut quelques minutes plus tard.)"
+            ))
             for f in failed:
-                self.stdout.write(self.style.ERROR(f'    Échec Expo: {f}'))
+                self.stdout.write(self.style.ERROR(f'    Échec Expo (ticket): {f}'))
+            if tickets:
+                self.stdout.write('  Tickets:')
+                for t in tickets:
+                    self.stdout.write(f"    {t}")
         except Exception as exc:
             self.stdout.write(self.style.ERROR(f'  EXCEPTION pendant push_to_user: {exc!r}'))
             import traceback

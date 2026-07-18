@@ -230,6 +230,21 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'notifications.send_exam_reminders',
         'schedule': crontab(hour=8, minute=15),
     },
+    # Confirme le statut réel de livraison des push Expo (un ticket 'ok' ne
+    # veut pas dire livré) et désactive les tokens morts — voir
+    # apps.notifications.push.check_expo_receipts. Toutes les 30 min : Expo
+    # a besoin de quelques minutes après l'envoi avant qu'un reçu soit prêt.
+    'check-push-receipts': {
+        'task': 'notifications.check_push_receipts',
+        'schedule': crontab(minute='*/30'),
+    },
+    # Relance les envois EMAIL/SMS/WHATSAPP en échec (RETRYING) — existait
+    # déjà comme tâche mais n'était jamais planifiée, donc ne tournait
+    # jamais tant qu'on ne l'appelait pas manuellement.
+    'retry-failed-notifications': {
+        'task': 'notifications.retry_failed',
+        'schedule': crontab(minute='*/15'),
+    },
 }
 
 # CinetPay Configuration — API v1 "Aurora" (account_key/account_password

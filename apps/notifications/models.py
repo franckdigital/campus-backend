@@ -180,7 +180,11 @@ class NotificationLog(BaseModel):
         self.sent_at = timezone.now()
         if address:
             self.recipient_address = address
-        self.save(update_fields=['status', 'sent_at', 'recipient_address'])
+        # 'metadata' included so callers that stash data on the instance just
+        # before calling mark_sent() (e.g. Expo push ticket ids, see
+        # apps.notifications.services.dispatch_notification) don't lose it —
+        # this save() is otherwise the only one that follows a status change.
+        self.save(update_fields=['status', 'sent_at', 'recipient_address', 'metadata'])
 
     def mark_failed(self, error=''):
         self.status = 'FAILED'

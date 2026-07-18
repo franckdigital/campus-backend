@@ -13,6 +13,23 @@ def retry_failed_notifications():
     return count
 
 
+@shared_task(name='notifications.check_push_receipts')
+def check_push_receipts():
+    """Periodic task: confirm real delivery outcome for PUSH logs whose
+    Expo ticket said 'ok' but whose actual receipt hasn't been checked yet.
+    A ticket 'ok' only means Expo accepted the request — without this task
+    a real delivery failure (dead token, misconfigured Android FCM
+    credential, etc.) never shows up anywhere and looks identical to a
+    successful send. See apps.notifications.push.check_expo_receipts."""
+    from .push import check_expo_receipts
+    result = check_expo_receipts()
+    logger.info(
+        "check_push_receipts: %d log(s) checked, %d delivered, %d failed",
+        result['checked'], result['delivered'], result['failed'],
+    )
+    return result
+
+
 @shared_task(name='notifications.send_exam_reminders')
 def send_exam_reminders():
     """Daily periodic task: for every active, automatic ReminderConfig of

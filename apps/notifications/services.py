@@ -225,7 +225,7 @@ def dispatch_notification(notification, channels=None, force_channels=None):
 
         elif channel == 'PUSH':
             from .push import push_to_user
-            success, _ = push_to_user(
+            success, _, tickets = push_to_user(
                 notification.recipient,
                 notification.title,
                 notification.message,
@@ -233,6 +233,12 @@ def dispatch_notification(notification, channels=None, force_channels=None):
                 channel_id=_android_channel_for(notification),
             )
             if success > 0:
+                # 'SENT' here only means Expo accepted the ticket — not that
+                # it was actually delivered. Stash the ticket ids so the
+                # periodic check_push_receipts task can confirm real
+                # delivery later and flip this to DELIVERED or FAILED (see
+                # apps.notifications.push.check_expo_receipts).
+                log.metadata = {'tickets': tickets}
                 log.mark_sent()
             else:
                 log.mark_failed('Aucun token actif ou envoi échoué')
