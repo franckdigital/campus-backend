@@ -1020,7 +1020,16 @@ def compute_tuition_schedule_status(student, academic_year=None):
 
     result['cumulative_due'] = cumulative_due
     result['cumulative_paid'] = cumulative_paid
-    result['is_up_to_date'] = bool(student.echeance_override) or cumulative_paid >= cumulative_due
+    # Registration fee must be settled first — a brand-new, not-yet-enrolled
+    # student (see the dossier's own "Étape 2 : payer l'inscription" prompt)
+    # has no installment due yet either, so `cumulative_paid >= cumulative_due`
+    # was trivially true (0 >= 0), showing "à jour" for someone who hasn't
+    # paid a single franc and isn't even inscrit. echeance_override still
+    # wins unconditionally — an admin's explicit exemption should never be
+    # second-guessed by the registration-fee check.
+    result['is_up_to_date'] = bool(student.echeance_override) or (
+        student.registration_fee_paid and cumulative_paid >= cumulative_due
+    )
     return result
 
 
