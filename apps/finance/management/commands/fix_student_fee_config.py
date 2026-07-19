@@ -38,6 +38,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--email', help='Email of the student user')
         parser.add_argument('--matricule', help='Matricule of the student (alternative to --email)')
+        parser.add_argument('--id', help='Student UUID (alternative to --email/--matricule — e.g. from the dossier page URL)')
         parser.add_argument(
             '--yes', action='store_true',
             help='Actually apply the fix. Without this flag, only a dry-run preview is printed.'
@@ -48,14 +49,16 @@ class Command(BaseCommand):
         from apps.finance.models import FeeConfiguration, Invoice
         from apps.academic.models import Class as AcademicClass
 
-        if not options['email'] and not options['matricule']:
-            raise CommandError('Pass --email or --matricule to identify the student.')
+        if not options['email'] and not options['matricule'] and not options['id']:
+            raise CommandError('Pass --email, --matricule, or --id to identify the student.')
 
         try:
             if options['email']:
                 student = Student.objects.select_related('user', 'site').get(user__email=options['email'])
-            else:
+            elif options['matricule']:
                 student = Student.objects.select_related('user', 'site').get(matricule=options['matricule'])
+            else:
+                student = Student.objects.select_related('user', 'site').get(pk=options['id'])
         except Student.DoesNotExist:
             raise CommandError('No matching student found.')
 

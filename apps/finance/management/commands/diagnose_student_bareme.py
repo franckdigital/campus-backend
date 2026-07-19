@@ -18,19 +18,22 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--email', help='Email of the student user')
         parser.add_argument('--matricule', help='Matricule of the student (alternative to --email)')
+        parser.add_argument('--id', help='Student UUID (alternative to --email/--matricule — e.g. from the dossier page URL)')
 
     def handle(self, *args, **options):
         from apps.students.models import Student
         from apps.finance.models import FeeConfiguration
 
-        if not options['email'] and not options['matricule']:
-            raise CommandError('Pass --email or --matricule.')
+        if not options['email'] and not options['matricule'] and not options['id']:
+            raise CommandError('Pass --email, --matricule, or --id.')
 
         try:
             if options['email']:
                 student = Student.objects.select_related('user', 'site').get(user__email=options['email'])
-            else:
+            elif options['matricule']:
                 student = Student.objects.select_related('user', 'site').get(matricule=options['matricule'])
+            else:
+                student = Student.objects.select_related('user', 'site').get(pk=options['id'])
         except Student.DoesNotExist:
             raise CommandError('No matching student found.')
 
@@ -40,6 +43,20 @@ class Command(BaseCommand):
         self.stdout.write(f"  site           = {student.site} (id={student.site_id})")
         self.stdout.write(f"  modality       = {student.modality!r}")
         self.stdout.write(f"  affectation    = {student.affectation_status!r}")
+
+        # Surface duplicate ENROLLED+active rows directly — resolve_current_enrollment
+        # (used everywhere: this command, ensure_student_invoices, financial_summary)
+        # picks the most-recent by created_at when more than one exists, which is
+        # exactly the failure mode that silently prices a student off a stale/wrong
+        # programme's barème (see apps.academic.signals.deactivate_other_enrollments,
+        # which prevents this going forward but doesn't retroactively clean up rows
+        # created before it existed).
+        active_enrollments = list(student.enrollments.filter(status='ENROLLED', is_active=True).select_related('class_obj__level__program', 'academic_year').order_by('-created_at'))
+        if len(active_enrollments) > 1:
+            self.stdout.write(self.style.ERROR(f"\n  /!\\ {len(active_enrollments)} inscriptions ENROLLED+active trouvées — une seule devrait exister :"))
+            for e in active_enrollments:
+                self.stdout.write(f"    - id={e.id} classe={e.class_obj} créée le {e.created_at} {'<- la plus récente (celle utilisée)' if e is active_enrollments[0] else '(IGNORÉE mais toujours active — à désactiver/supprimer via l\'onglet Parcours)'}")
+            self.stdout.write('')
 
         enrollment_row = student.enrollments.filter(
             status='ENROLLED', is_active=True
