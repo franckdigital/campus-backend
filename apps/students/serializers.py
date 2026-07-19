@@ -190,14 +190,29 @@ class StudentCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Student
+        # 'id' MUST be listed — ModelSerializer only auto-includes the PK in
+        # its output when it's explicitly in `fields` (it doesn't add it for
+        # free the way the admin might expect). Without it, POST /students/
+        # returned a 201 body with no `id` at all, so the admin form's own
+        # `if (newStudent?.id && formData.class_id && ...)` guard right after
+        # creation silently evaluated false and *never even attempted* to
+        # create the student's Enrollment — no error, nothing in the
+        # network tab to suggest anything failed, just a student created
+        # with zero enrollments every single time, regardless of which
+        # classe/filière the admin actually picked in the form. That empty
+        # enrollment is exactly what later let a separate signal
+        # (create_enrollment_on_registration_invoice, see apps.finance.models)
+        # auto-guess an unrelated class (in practice, always BTS) the moment
+        # any invoice was created for the student.
         fields = [
-            'user_data', 'matricule', 'gender', 'birth_date', 'birth_place',
+            'id', 'user_data', 'matricule', 'gender', 'birth_date', 'birth_place',
             'nationality', 'address', 'city', 'site', 'status', 'modality', 'affectation_status',
             'admission_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'registration_fee',
             'tuition_fee', 'class_id'
         ]
+        read_only_fields = ['id']
 
     def create(self, validated_data):
         from apps.accounts.models import User
