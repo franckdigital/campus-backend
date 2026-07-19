@@ -708,20 +708,29 @@ class FeeConfiguration(BaseModel):
         of ("le barème de Licence 1 Gestion Commerciale") — modality and
         affectation are refinements on top of it, tried in every combination
         (both exact, modality-only relaxed, affectation-only relaxed, both
-        relaxed) before level/program itself is ever given up on. Only once
-        no barème at all exists for that level/program does resolution fall
-        back to a site-wide or global default.
+        relaxed) before level itself is ever given up on (falling back to a
+        program-level, level=None row). Returns None — never a different
+        program's or a site-wide/global row — once no barème exists at all
+        for that level/program: a "site-wide" or "global" (program=None)
+        fallback used to exist here, but it meant ANY program with no barème
+        of its own silently inherited whatever unrelated program's row
+        happened to be the only one with program=None/level=None in the DB
+        (in practice, a stray leftover config from initial BTS setup/testing)
+        — e.g. a brand-new Licence 1 enrollment with no barème configured yet
+        silently priced off BTS's 150 000/500 000 instead of showing
+        "Non configuré". Callers already handle a None return safely (falling
+        back to the student's own registration_fee/tuition_fee, or 0) — that
+        visible gap is the correct signal that this program/level still needs
+        its own barème set up, not a wrong number.
 
-        Without every one of those relaxed combinations, a school that only
-        entered ONE barème row per niveau (a single modality/affectation
-        combo, since that's usually all they have at first) leaves any newly
-        enrolled student whose modality or affectation doesn't happen to match
-        that exact combo resolving to NO barème at all — Inscription/Scolarité
-        show up "Non configuré" even though the level/program clearly has a
-        barème configured. Reusing the level-accurate amount regardless of
-        modality/affectation is far more useful than silently returning
-        nothing (which is what a blank "Scolarité" status looks like to
-        students/admins).
+        Without every one of the modality/affectation relaxation combinations
+        above, a school that only entered ONE barème row per niveau (a single
+        modality/affectation combo, since that's usually all they have at
+        first) would leave any newly enrolled student whose modality or
+        affectation doesn't happen to match that exact combo resolving to NO
+        barème at all, even though the level/program clearly has one
+        configured — that relaxation is safe because it never leaves the
+        student's actual program.
         """
         qs = cls.objects.filter(is_active=True, fee_category=fee_category)
 
@@ -768,20 +777,10 @@ class FeeConfiguration(BaseModel):
                 if cfg:
                     return cfg
 
-        # ── Site-wide (no level, no program) — same relaxation order ────────
-        site_filters = [
-            dict(modality=modality, affectation_status=affectation_status),
-            dict(affectation_status=affectation_status),
-            dict(modality=modality),
-            dict(),
-        ]
-        for extra in site_filters:
-            cfg = _first(site=site, level=None, program=None, **extra)
-            if cfg:
-                return cfg
-
-        # ── Global fallback (no site either) ─────────────────────────────────
-        return _first(site=None, level=None, program=None)
+        # No barème configured for this level/program at all — deliberately
+        # NOT falling back to a site-wide/global (program=None) row here, see
+        # the docstring above. Callers treat None as "not configured yet".
+        return None
 
 
 def recalculate_invoices_for_fee_config(fee_config, old_amount):
