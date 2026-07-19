@@ -432,6 +432,16 @@ class StudentViewSet(viewsets.ModelViewSet):
             + (total_tuition_only if has_tuition_invoices else configured_tuition)
         # Tuition only (scolarité, sans inscription)
         effective_tuition_only = total_tuition_only if has_tuition_invoices else configured_tuition
+        # Registration only (inscription) — same rule as tuition just above:
+        # prefer the real invoiced total once one exists. The 'registration_fee'
+        # response field used to always be configured_registration (the live
+        # barème guess) even when a real inscription invoice already existed —
+        # so an admin who explicitly picked/typed a specific amount on the
+        # invoice (e.g. a barème the list-picker resolved for their exact
+        # choice) saw the dossier header silently show a *different*, live
+        # re-guessed amount instead — wrong whenever that guess depends on the
+        # student's current enrollment being correct, which it may not be.
+        effective_registration = total_registration_invoiced if inscription_invoice_ids else configured_registration
         remaining = registration_balance + tuition_balance
 
         from apps.finance.models import compute_tuition_schedule_status
@@ -443,7 +453,7 @@ class StudentViewSet(viewsets.ModelViewSet):
             'total_paid':               total_paid,
             'remaining_balance':        remaining,
             'total_pending':            total_pending,
-            'registration_fee':         configured_registration,
+            'registration_fee':         effective_registration,
             'registration_fee_paid':    registration_fee_paid,       # computed from invoices + student flag
             'configured_tuition_fee':   configured_tuition,
             'configured_registration_fee': configured_registration,
