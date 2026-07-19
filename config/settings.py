@@ -105,7 +105,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
-# Database - MySQL
+# Database - MySQL BD
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
