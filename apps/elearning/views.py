@@ -1284,9 +1284,15 @@ class ExamSessionSnapshotView(APIView):
         # Gemini vision analysis — a real natural-language description of what
         # the snapshot shows (not just boolean flags), stored directly on the
         # snapshot so the admin review screen can display it right next to
-        # the image without a second round-trip.
+        # the image without a second round-trip. `priority` marks a check on
+        # an already-suspended session (see SecureExamTakeScreen.js) — the
+        # client sets it explicitly since only it knows its own local
+        # suspension state; those checks draw on a reserved slice of the
+        # Gemini rate budget so routine checks on other students can't starve
+        # them out (see GEMINI_PRIORITY_RPM_RESERVE).
         from .ai_service import analyze_exam_snapshot
-        analysis = analyze_exam_snapshot(image_bytes)
+        priority = request.data.get('priority') in ('1', 'true', 'True', True)
+        analysis = analyze_exam_snapshot(image_bytes, priority=priority)
         face_detected  = analysis['face_detected']
         phone_detected = analysis['phone_detected']
         snapshot.face_detected  = face_detected
@@ -1307,6 +1313,11 @@ class ExamSessionSnapshotView(APIView):
             'looking_away': analysis['looking_away'],
             'gaze_direction': analysis['gaze_direction'],
             'description': analysis['description'],
+            # False when this was a fallback (quota/concurrency exhausted, or
+            # the call failed) rather than a real Gemini verdict — lets the
+            # client back off its capture rate instead of hammering a
+            # saturated budget with requests it already knows will fail.
+            'ai_available': analysis.get('ai_available', True),
         })
 
 
@@ -1377,7 +1388,13 @@ class ExamSessionGradeView(APIView):
 
 
 class ExamSessionSubmitFileView(APIView):
-    """POST /elearning/exam-sessions/<session_id>/submit-file/ — Étudiant uploade sa copie."""
+    """POST /elearning/exam-sessions/<session_id>/submit-file/ — Étudiant soumet sa
+    copie pour la partie PDF d'un examen (fichier et/ou réponse texte rédigée
+    directement dans le système — voir la section "Réponse PDF" côté web/mobile).
+    Both are optional here on purpose: the client enforces "at least one of the
+    two" before letting the student submit voluntarily, but an auto-submit
+    (timer expiry, anti-cheat lock) must still be able to close the session
+    even when the student left the PDF section untouched."""
     tuition_gate_required = True
 
     def post(self, request, session_id):
@@ -1392,11 +1409,13 @@ class ExamSessionSubmitFileView(APIView):
             return Response({'detail': 'Non autorisé.'}, status=status.HTTP_403_FORBIDDEN)
 
         submission_file = request.FILES.get('submission_file')
-        if not submission_file:
-            return Response({'detail': 'Fichier requis.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        session.submission_file = submission_file
-        session.submission_note = request.data.get('note', '')
+        # 'submission_note' accepted for backward compatibility with older
+        # frontend builds that used that key instead of 'note'.
+        note = request.data.get('note') or request.data.get('submission_note') or ''
+        if submission_file:
+            session.submission_file = submission_file
+        if note:
+            session.submission_note = note
         if session.status == 'STARTED':
             from django.utils import timezone as tz
             session.status = 'SUBMITTED'

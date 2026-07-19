@@ -280,6 +280,24 @@ ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
 # neutral stub (no anomaly flags raised, description says AI is unconfigured).
 GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
 GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-flash-latest')
+# Caps how many analyze_exam_snapshot calls can be in flight at once across
+# this process (see the semaphore in ai_service.py) — protects against a
+# burst of concurrent exam-takers firing dozens of parallel Gemini requests
+# that collectively exceed the account's own rate limit. Tune this to
+# whatever the configured GEMINI_API_KEY's tier actually allows; the free
+# tier in particular has a low requests-per-minute ceiling that no amount of
+# application-side concurrency control can exceed — this only smooths bursts
+# and fails fast instead of piling up, it can't manufacture more quota.
+GEMINI_MAX_CONCURRENT_REQUESTS = config('GEMINI_MAX_CONCURRENT_REQUESTS', default=12, cast=int)
+# Real requests-per-minute budget for the configured key — default is
+# conservative, comfortably under the free tier's own low RPM ceiling.
+# Raise this once billing is enabled on the Gemini project (see
+# aistudio.google.com/rate-limit for the account's actual current tier).
+GEMINI_RPM_LIMIT = config('GEMINI_RPM_LIMIT', default=12, cast=int)
+# Slice of GEMINI_RPM_LIMIT reserved for checks on already-suspended exam
+# sessions (verifying whether the student keeps misbehaving mid-suspension)
+# so routine first-offense checks on other students can't starve them out.
+GEMINI_PRIORITY_RPM_RESERVE = config('GEMINI_PRIORITY_RPM_RESERVE', default=3, cast=int)
 
 # Zoom Configuration
 ZOOM_API_KEY = config('ZOOM_API_KEY', default='')

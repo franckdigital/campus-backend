@@ -4,6 +4,9 @@ Falls back to a stub response if ANTHROPIC_API_KEY is not configured.
 """
 import json
 import logging
+import threading
+import time
+from collections import deque
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -11,6 +14,74 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = getattr(settings, 'ANTHROPIC_API_KEY', '')
 GEMINI_API_KEY = getattr(settings, 'GEMINI_API_KEY', '')
 GEMINI_VISION_MODEL = getattr(settings, 'GEMINI_VISION_MODEL', 'gemini-2.0-flash')
+GEMINI_MAX_CONCURRENT_REQUESTS = getattr(settings, 'GEMINI_MAX_CONCURRENT_REQUESTS', 12)
+# Real requests-per-minute budget for the configured GEMINI_API_KEY — a
+# concurrency cap alone (above) only limits how many calls are *in flight*
+# at once; it doesn't stop the app from *firing* more requests per minute
+# than Gemini actually allows, which just trades "blocked server threads"
+# for "wasted 429 responses" without saving any real capacity. Default is
+# conservative (comfortably under the free tier's own low RPM ceiling) —
+# raise it via the env var once billing is enabled on the Gemini project.
+GEMINI_RPM_LIMIT = getattr(settings, 'GEMINI_RPM_LIMIT', 12)
+# Slots carved out of GEMINI_RPM_LIMIT reserved exclusively for `priority`
+# calls (see analyze_exam_snapshot) — checking whether an *already
+# suspended* student keeps misbehaving is the highest-value use of scarce
+# quota (see SecureExamTakeScreen.js's suspension-escalation flow), so a
+# burst of routine first-time checks from other students can never fully
+# starve those checks out.
+GEMINI_PRIORITY_RPM_RESERVE = getattr(settings, 'GEMINI_PRIORITY_RPM_RESERVE', 3)
+
+# One process-wide semaphore shared by every request this worker process
+# handles (analyze_exam_snapshot runs as a synchronous DRF view, so each
+# concurrent call occupies its own thread while it blocks on Gemini's
+# network I/O). Bounds how many Gemini calls can be in flight at once so a
+# burst of concurrent exam-takers doesn't fire dozens of parallel requests
+# that (a) collectively exceed the account's own rate limit — every one of
+# them coming back 429 — and (b) exhaust the ASGI sync-view thread pool,
+# which used to make *unrelated* requests across the whole app queue up
+# behind these slow, blocking calls too. Excess requests wait briefly for a
+# free slot (acquire has its own short timeout below) instead of piling up
+# unboundedly.
+_gemini_semaphore = threading.Semaphore(GEMINI_MAX_CONCURRENT_REQUESTS)
+
+# Sliding-window (last 60s) request counter, checked *before* even touching
+# the semaphore/network — cheap, in-memory, and specifically caps the actual
+# requests-per-minute rate against GEMINI_RPM_LIMIT, which the semaphore
+# above cannot do on its own (a burst of short, fast requests can blow past
+# an RPM budget while never having more than a couple in flight at once).
+# Process-local: on a deployment with multiple Daphne/Gunicorn worker
+# processes each process gets its own independent budget, so the effective
+# total is (GEMINI_RPM_LIMIT × process count) — fine for the single/few
+# -process scale this project runs at; move to a Redis-backed counter
+# (REDIS_URL is already configured for Channels/Celery) if that stops
+# holding.
+_rpm_lock = threading.Lock()
+_rpm_timestamps = deque()          # monotonic times of general (non-priority) grants in the last 60s
+_rpm_priority_timestamps = deque() # monotonic times of priority grants in the last 60s
+
+
+def _try_acquire_rpm_slot(priority: bool) -> bool:
+    now = time.monotonic()
+    cutoff = now - 60
+    with _rpm_lock:
+        while _rpm_timestamps and _rpm_timestamps[0] < cutoff:
+            _rpm_timestamps.popleft()
+        while _rpm_priority_timestamps and _rpm_priority_timestamps[0] < cutoff:
+            _rpm_priority_timestamps.popleft()
+        total_used = len(_rpm_timestamps) + len(_rpm_priority_timestamps)
+        if priority:
+            # Priority traffic can draw on the whole budget, not just its
+            # reserve — the reserve only exists to protect it *from*
+            # general traffic, not to cap it below general's own share.
+            if total_used >= GEMINI_RPM_LIMIT:
+                return False
+            _rpm_priority_timestamps.append(now)
+            return True
+        general_budget = max(GEMINI_RPM_LIMIT - GEMINI_PRIORITY_RPM_RESERVE, 0)
+        if len(_rpm_timestamps) >= general_budget:
+            return False
+        _rpm_timestamps.append(now)
+        return True
 
 
 def _call_claude(system_prompt: str, messages: list[dict], max_tokens: int = 2048) -> tuple[str, int]:
@@ -152,10 +223,15 @@ def _gemini_stub_result(reason: str) -> dict:
         'suspicious': False,
         'looking_away': False,
         'gaze_direction': 'aucun',
+        # False whenever this is a fallback rather than a real verdict — a
+        # "clean" stub result means "we don't know", not "nothing suspicious
+        # was observed". Callers that adapt their polling rate (mobile's
+        # capture loop) or that want to distinguish the two cases read this.
+        'ai_available': False,
     }
 
 
-def analyze_exam_snapshot(image_bytes: bytes) -> dict:
+def analyze_exam_snapshot(image_bytes: bytes, priority: bool = False) -> dict:
     """Proctoring — Gemini vision analysis of one exam webcam snapshot.
 
     Unlike the boolean-only client-side TensorFlow.js detection, this asks a
@@ -166,12 +242,28 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
     next to the snapshot in the admin review screen — so callers never need
     to special-case a missing/failed analysis.
 
+    `priority=True` marks a check for a session that's *already suspended*
+    (verifying whether the student keeps misbehaving during the suspension —
+    see SecureExamTakeScreen.js) — the single highest-value use of a scarce
+    Gemini quota, so it draws from a reserved slice of the rate budget that
+    routine first-offense checks can't touch (see GEMINI_PRIORITY_RPM_RESERVE).
+
     Falls back to a neutral stub (no flags raised) if GEMINI_API_KEY isn't
-    configured or the call fails, so proctoring degrades gracefully instead
-    of crashing when the free-tier key is absent or rate-limited.
+    configured, the rate/concurrency budget is exhausted, or the call fails,
+    so proctoring degrades gracefully instead of crashing when the free-tier
+    key is absent or rate-limited.
     """
     if not GEMINI_API_KEY:
         return _gemini_stub_result("Analyse IA indisponible (GEMINI_API_KEY non configurée).")
+
+    if not _try_acquire_rpm_slot(priority):
+        # Known in advance we'd very likely just get a 429 back — don't even
+        # spend a semaphore slot or a network round-trip finding that out;
+        # conserve the budget for the next capture instead.
+        logger.info('Gemini snapshot analysis skipped — RPM budget (%s/min, priority=%s) exhausted.', GEMINI_RPM_LIMIT, priority)
+        return _gemini_stub_result(
+            "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
+        )
 
     import base64
     import requests
@@ -210,71 +302,97 @@ def analyze_exam_snapshot(image_bytes: bytes) -> dict:
             'looking_away', 'gaze_direction',
         ],
     }
-    import time
 
-    max_attempts = 3
-    last_error = None
-    for attempt in range(max_attempts):
-        try:
-            resp = requests.post(
-                f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
-                params={'key': GEMINI_API_KEY},
-                json={
-                    'contents': [{
-                        'parts': [
-                            {'text': prompt},
-                            {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
-                        ],
-                    }],
-                    'generationConfig': {
-                        'temperature': 0.1,
-                        'responseMimeType': 'application/json',
-                        # A strict schema (rather than just prompting for JSON)
-                        # is what actually guarantees well-formed, complete
-                        # output — responseMimeType alone still occasionally
-                        # produced JSON that failed to parse.
-                        'responseSchema': response_schema,
-                        'maxOutputTokens': 800,
-                        # Newer Gemini models spend part of the output token
-                        # budget on hidden "thinking" tokens by default — for a
-                        # one-sentence classification task that just silently
-                        # truncates the actual JSON answer before it's written.
-                        'thinkingConfig': {'thinkingBudget': 0},
+    # Bound how long a request waits for a free concurrency slot before
+    # giving up — under a genuine burst (dozens of students' captures
+    # landing at once), queuing forever here would just move the pile-up
+    # from "blocked on Gemini" to "blocked on this semaphore", tying up the
+    # same worker threads either way. Failing fast into the neutral stub
+    # after a few seconds keeps this one slow proctoring tick from blocking
+    # the thread indefinitely — the next capture (a few seconds later) tries
+    # again on its own.
+    if not _gemini_semaphore.acquire(timeout=8):
+        logger.warning('Gemini snapshot analysis skipped — concurrency limit (%s) reached.', GEMINI_MAX_CONCURRENT_REQUESTS)
+        return _gemini_stub_result(
+            "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
+        )
+
+    try:
+        # Two attempts, short timeout each — worst case this call blocks its
+        # thread for roughly (6 + 1 + 6) = 13s instead of the ~65s it could
+        # reach at 3 attempts × 20s timeout with a growing sleep backoff.
+        # That budget matters a lot under concurrent load: every second a
+        # thread spends blocked here is a second it can't serve any other
+        # request (this view runs synchronously), so a handful of slow calls
+        # used to be enough to exhaust the whole app's request-handling
+        # capacity, not just this endpoint's.
+        max_attempts = 2
+        last_error = None
+        for attempt in range(max_attempts):
+            try:
+                resp = requests.post(
+                    f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
+                    params={'key': GEMINI_API_KEY},
+                    json={
+                        'contents': [{
+                            'parts': [
+                                {'text': prompt},
+                                {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
+                            ],
+                        }],
+                        'generationConfig': {
+                            'temperature': 0.1,
+                            'responseMimeType': 'application/json',
+                            # A strict schema (rather than just prompting for JSON)
+                            # is what actually guarantees well-formed, complete
+                            # output — responseMimeType alone still occasionally
+                            # produced JSON that failed to parse.
+                            'responseSchema': response_schema,
+                            'maxOutputTokens': 800,
+                            # Newer Gemini models spend part of the output token
+                            # budget on hidden "thinking" tokens by default — for a
+                            # one-sentence classification task that just silently
+                            # truncates the actual JSON answer before it's written.
+                            'thinkingConfig': {'thinkingBudget': 0},
+                        },
                     },
-                },
-                timeout=20,
-            )
-            resp.raise_for_status()
-            text = resp.json()['candidates'][0]['content']['parts'][0]['text']
-            parsed = json.loads(text)
-            return {
-                'description': parsed.get('description') or 'Analyse indisponible.',
-                'face_detected': parsed.get('face_detected', True),
-                'phone_detected': parsed.get('phone_detected', False),
-                'multiple_faces': parsed.get('multiple_faces', False),
-                'suspicious': parsed.get('suspicious', False),
-                'looking_away': parsed.get('looking_away', False),
-                'gaze_direction': parsed.get('gaze_direction') or 'aucun',
-            }
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            status_code = e.response.status_code if e.response is not None else None
-            # 429 (rate limited) and 503 (momentarily overloaded) are
-            # transient on Google's side — worth a couple of quick retries.
-            # Anything else (401 bad key, 400 bad request...) won't succeed
-            # on retry, so fail fast instead of burning the request budget.
-            if status_code not in (429, 503) or attempt == max_attempts - 1:
+                    timeout=6,
+                )
+                resp.raise_for_status()
+                text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+                parsed = json.loads(text)
+                return {
+                    'description': parsed.get('description') or 'Analyse indisponible.',
+                    'face_detected': parsed.get('face_detected', True),
+                    'phone_detected': parsed.get('phone_detected', False),
+                    'multiple_faces': parsed.get('multiple_faces', False),
+                    'suspicious': parsed.get('suspicious', False),
+                    'looking_away': parsed.get('looking_away', False),
+                    'gaze_direction': parsed.get('gaze_direction') or 'aucun',
+                    'ai_available': True,
+                }
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                status_code = e.response.status_code if e.response is not None else None
+                # 429 (rate limited) and 503 (momentarily overloaded) are
+                # transient on Google's side — worth one quick retry.
+                # Anything else (401 bad key, 400 bad request...) won't
+                # succeed on retry, so fail fast instead of burning the
+                # request budget (and holding the semaphore slot longer).
+                if status_code not in (429, 503) or attempt == max_attempts - 1:
+                    break
+                time.sleep(1.0)
+            except Exception as e:
+                last_error = e
                 break
-            time.sleep(1.5 * (attempt + 1))
-        except Exception as e:
-            last_error = e
-            break
 
-    logger.warning('Gemini snapshot analysis failed after retries: %s', last_error)
-    # Show a clean, non-technical message to the admin instead of the raw
-    # exception (e.g. a Python traceback string) — the real error is still
-    # logged above for debugging. Not marked suspicious: a transient outage
-    # on Google's side isn't evidence of anything about the student.
-    return _gemini_stub_result(
-        "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
-    )
+        logger.warning('Gemini snapshot analysis failed after retries: %s', last_error)
+        # Show a clean, non-technical message to the admin instead of the raw
+        # exception (e.g. a Python traceback string) — the real error is still
+        # logged above for debugging. Not marked suspicious: a transient outage
+        # on Google's side isn't evidence of anything about the student.
+        return _gemini_stub_result(
+            "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
+        )
+    finally:
+        _gemini_semaphore.release()
