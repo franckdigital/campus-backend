@@ -566,49 +566,58 @@ class Expense(models.Model):
 @receiver(post_save, sender=Invoice)
 def create_enrollment_on_registration_invoice(sender, instance, created, **kwargs):
     """
-    Automatically create enrollment when registration fee invoice is created.
-    This allows academic path to display immediately, regardless of payment status.
+    Automatically create enrollment when registration fee invoice is created,
+    but ONLY by reusing a class the student was already, genuinely enrolled
+    in before (e.g. a prior academic year) — never by guessing.
+
+    This used to have a second fallback ("any active class at the site") for
+    when the student had no prior enrollment at all — an unordered
+    Class.objects.filter(...).first() with no relation whatsoever to what
+    program/level the admin actually registered the student into. Since
+    Class.Meta.ordering is ['level', 'name'] (an arbitrary tie-break, not a
+    ranking of relevance), this consistently resolved to whichever class
+    happened to sort first — in practice, an early-seeded BTS class — and
+    silently created a real, ENROLLED+active Enrollment row for it. Every
+    downstream barème/invoice resolution built on "the student's current
+    enrollment" (get_for_enrollment, financial_summary, the échéancier) then
+    correctly-but-wrongly priced the student off BTS's fees, even though the
+    admin had chosen an entirely different programme at registration — a
+    brand-new student whose own createEnrollment call happened to fail (or
+    hadn't landed yet) got silently, invisibly re-enrolled into an unrelated
+    programme the moment their first invoice was saved. Better to create no
+    enrollment at all here (leaving the student visibly "N/A"/unenrolled,
+    an honest state the admin will notice and fix via Parcours) than to
+    invent a wrong one that looks legitimate.
     """
     # Only proceed if invoice has a student
     if not instance.student:
         return
-    
+
     # Check if invoice contains registration fee (frais d'inscription)
     has_registration_fee = instance.items.filter(
         fee_type__code__icontains='inscription'
     ).exists()
-    
+
     if not has_registration_fee:
         return
-    
+
     # Import here to avoid circular imports
-    from apps.academic.models import Enrollment, Class
-    
+    from apps.academic.models import Enrollment
+
     # Check if student already has an enrollment for this academic year
     existing_enrollment = Enrollment.objects.filter(
         student=instance.student,
         academic_year=instance.academic_year
     ).exists()
-    
+
     if existing_enrollment:
         return  # Enrollment already exists, don't create duplicate
-    
-    # Try to find a class for the student
-    # Option 1: Get from latest enrollment
+
+    # Only reuse a class the student was genuinely enrolled in before (e.g.
+    # continuing from a prior academic year) — never guess one from scratch.
     latest_enrollment = instance.student.enrollments.select_related('class_obj').order_by('-created_at').first()
-    
-    if latest_enrollment:
-        # Use the same class from previous enrollment
-        class_obj = latest_enrollment.class_obj
-    else:
-        # Option 2: Get any active class from the same site
-        class_obj = Class.objects.filter(
-            site=instance.site,
-            academic_year=instance.academic_year,
-            is_active=True
-        ).first()
-    
-    # Create enrollment if we found a class
+    class_obj = latest_enrollment.class_obj if latest_enrollment else None
+
     if class_obj:
         Enrollment.objects.create(
             student=instance.student,
@@ -619,7 +628,7 @@ def create_enrollment_on_registration_invoice(sender, instance, created, **kwarg
         )
         print(f"✅ Enrollment auto-created for student {instance.student.matricule} in class {class_obj.name}")
     else:
-        print(f"⚠️ No class found for student {instance.student.matricule} - enrollment not created")
+        print(f"⚠️ No prior enrollment for student {instance.student.matricule} — leaving unenrolled (fix via Parcours) instead of guessing a class.")
 
 
 class FeeConfiguration(BaseModel):
