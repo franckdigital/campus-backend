@@ -238,11 +238,13 @@ class FeeInstallmentSerializer(serializers.ModelSerializer):
 
 
 class FeeConfigurationSerializer(serializers.ModelSerializer):
-    # Model has a default (SCOLARITE) so a bare Django save() never fails
-    # accidentally — but through the API this must always be an explicit
-    # choice, never silently defaulted, since the two categories behave very
-    # differently (échéancier eligibility, "paid in full" business rule).
-    fee_category = serializers.ChoiceField(choices=FeeConfiguration.CATEGORY_CHOICES, required=True)
+    # Frais d'inscription and frais de scolarité are merged now — every
+    # barème created through the API is a SCOLARITE row (forced server-side
+    # in FeeConfigurationViewSet.perform_create), so the category is no
+    # longer a client choice. Read-only rather than removed entirely so the
+    # handful of deactivated legacy INSCRIPTION rows (pre-merge data) still
+    # display correctly wherever this serializer is used for read.
+    fee_category = serializers.ChoiceField(choices=FeeConfiguration.CATEGORY_CHOICES, read_only=True)
     site_name = serializers.SerializerMethodField()
     program_name = serializers.SerializerMethodField()
     level_name = serializers.SerializerMethodField()

@@ -2,7 +2,7 @@
 Read-only diagnostic: lists every invoice for one student with full detail
 (fee types on each item, status, amounts, created_at) — used to identify
 duplicate/orphan invoices (e.g. an INSCRIPTION invoice with a balance left
-even though the student's registration_fee_paid flag says paid).
+even though the student's is_enrolled flag says paid).
 
 Usage:
     python manage.py list_student_invoices --email ibrahim.coulibaly@escam-test.ci
@@ -35,7 +35,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(
             f"\n=== Factures de {student.user.full_name} ({student.user.email}) — #{student.matricule} ===\n"
         ))
-        self.stdout.write(f"  registration_fee_paid = {student.registration_fee_paid}")
+        self.stdout.write(f"  is_enrolled = {student.is_enrolled}")
 
         invoices = Invoice.objects.filter(student=student).prefetch_related('items__fee_type').order_by('created_at')
         for inv in invoices:

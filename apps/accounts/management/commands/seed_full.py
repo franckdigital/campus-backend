@@ -551,7 +551,7 @@ class Command(BaseCommand):
                 emergency_contact_name=f'{p_fn} {p_ln}',
                 emergency_contact_phone=f'+225 07 0{i+1} 0{i+1} 0{i+1} 0{i+1}',
                 emergency_contact_relation=relationship,
-                registration_fee=75000, registration_fee_paid=True,
+                registration_fee=75000, is_enrolled=True,
                 tuition_fee=tuition, total_paid=paid,
                 remaining_balance=tuition - paid,
             )

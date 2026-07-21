@@ -157,7 +157,7 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
-        'apps.students.permissions.IsRegistrationFeePaidOrExempt',
+        'apps.students.permissions.IsEnrolledOrExempt',
         'apps.elearning.permissions.IsTuitionUpToDateOrNotGated',
     ),
     'DEFAULT_FILTER_BACKENDS': (

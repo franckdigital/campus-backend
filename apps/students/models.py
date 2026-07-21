@@ -111,7 +111,11 @@ class Student(BaseModel):
     
     # Financial fields
     registration_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    registration_fee_paid = models.BooleanField(default=False)
+    is_enrolled = models.BooleanField(
+        default=False,
+        help_text="Inscrit = a payé au moins le seuil minimum (voir SystemConfig "
+                   "MIN_ENROLLMENT_PAYMENT) du total de ses frais de scolarité."
+    )
     tuition_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     remaining_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)

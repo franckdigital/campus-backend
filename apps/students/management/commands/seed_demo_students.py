@@ -112,7 +112,7 @@ class Command(BaseCommand):
                     'status': 'ACTIVE',
                     'admission_date': datetime.date(2025, 9, 1),
                     'registration_fee': 150000,
-                    'registration_fee_paid': True,
+                    'is_enrolled': True,
                     'tuition_fee': 2000000,
                     'total_paid': 1550000,
                     'remaining_balance': 450000,
@@ -131,7 +131,7 @@ class Command(BaseCommand):
                 student.status = 'ACTIVE'
                 student.admission_date = student.admission_date or datetime.date(2025, 9, 1)
                 student.registration_fee = student.registration_fee or 150000
-                student.registration_fee_paid = True
+                student.is_enrolled = True
                 student.tuition_fee = student.tuition_fee or 2000000
                 student.total_paid = student.total_paid or 1550000
                 student.remaining_balance = student.remaining_balance or 450000

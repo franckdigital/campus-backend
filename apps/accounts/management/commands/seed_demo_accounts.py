@@ -162,7 +162,7 @@ class Command(BaseCommand):
                 status='ACTIVE',
                 admission_date=date(2024, 9, 1),
                 registration_fee=50000,
-                registration_fee_paid=True,
+                is_enrolled=True,
                 tuition_fee=500000,
                 total_paid=250000,
                 remaining_balance=250000,

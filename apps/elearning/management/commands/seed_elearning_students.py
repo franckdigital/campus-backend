@@ -108,7 +108,7 @@ class Command(BaseCommand):
                     emergency_contact_name=f'{p_fn} {p_ln}',
                     emergency_contact_phone=p_tel,
                     emergency_contact_relation='PARENT',
-                    registration_fee=75000, registration_fee_paid=False,
+                    registration_fee=75000, is_enrolled=False,
                     tuition_fee=600000, total_paid=0,
                     remaining_balance=600000,
                 ),

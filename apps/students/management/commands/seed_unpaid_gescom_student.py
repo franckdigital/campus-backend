@@ -91,7 +91,7 @@ class Command(BaseCommand):
                     'nationality': 'Ivoirienne', 'status': 'ACTIVE',
                     'modality': 'PRESENTIEL', 'affectation_status': 'AFFECTE',
                     'admission_date': datetime.date(2025, 9, 1),
-                    'registration_fee': 150000, 'registration_fee_paid': False,
+                    'registration_fee': 150000, 'is_enrolled': False,
                     'tuition_fee': 500000,
                     'total_paid': 0, 'remaining_balance': 650000,
                 },
@@ -101,10 +101,10 @@ class Command(BaseCommand):
                 student.modality = 'PRESENTIEL'
                 student.affectation_status = 'AFFECTE'
                 student.status = 'ACTIVE'
-                student.registration_fee_paid = False
+                student.is_enrolled = False
                 student.echeance_override = False
                 student.save()
-            self.stdout.write(f'  Student: #{student.matricule} ({"créé" if s_created else "déjà existant"}) — registration_fee_paid=False, aucune facture')
+            self.stdout.write(f'  Student: #{student.matricule} ({"créé" if s_created else "déjà existant"}) — is_enrolled=False, aucune facture')
 
             Enrollment.objects.get_or_create(
                 student=student, academic_year=academic_year,

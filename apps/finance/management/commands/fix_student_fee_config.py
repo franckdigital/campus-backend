@@ -145,13 +145,13 @@ class Command(BaseCommand):
                     keep.refresh_from_db()
                     keep.save()  # recompute totals/balance/status
 
-            # --- Sync registration_fee_paid for INSCRIPTION ---
+            # --- Sync is_enrolled for INSCRIPTION ---
             if category == 'INSCRIPTION' and confirm:
                 keep.refresh_from_db()
                 new_flag = keep.balance <= 0
-                if student.registration_fee_paid != new_flag:
-                    student.registration_fee_paid = new_flag
-                    student.save(update_fields=['registration_fee_paid'])
+                if student.is_enrolled != new_flag:
+                    student.is_enrolled = new_flag
+                    student.save(update_fields=['is_enrolled'])
 
         if not any_change:
             self.stdout.write(self.style.SUCCESS('\nRien à corriger — les factures correspondent déjà au barème.'))
