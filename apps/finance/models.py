@@ -3,9 +3,23 @@ from django.conf import settings
 from django.utils import timezone
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from apps.core.models import BaseModel, Site, AcademicYear
+from apps.core.models import BaseModel, Site, AcademicYear, SystemConfig
 from apps.students.models import Student
 import uuid
+
+
+def get_min_enrollment_payment():
+    """Admin-configurable minimum cumulative tuition payment (FCFA) required
+    for a student to be considered 'inscrit' — stored via the generic
+    SystemConfig key/value store (same mechanism as e.g. mobile_money_number)
+    rather than a dedicated model field, so it can be edited from Settings
+    with no migration. Defaults to 50 000 FCFA when unset."""
+    from decimal import Decimal, InvalidOperation
+    raw = SystemConfig.get_value('MIN_ENROLLMENT_PAYMENT', default='50000')
+    try:
+        return Decimal(str(raw))
+    except (InvalidOperation, TypeError):
+        return Decimal('50000')
 
 
 class FeeType(BaseModel):
@@ -346,23 +360,8 @@ class Payment(BaseModel):
             self.validated_at = timezone.now()
             self.validated_by = user
             self.save()
-            # invoice.amount_paid is kept in sync by the on_payment_save signal
-            # (recomputed as the sum of all SUCCESS payments) — don't add here too.
-            # Auto-flag registration_fee_paid when a registration invoice is fully paid
-            try:
-                self.invoice.refresh_from_db()
-                if self.invoice.status == 'PAID':
-                    is_reg = (
-                        self.invoice.items.filter(fee_type__code__iregex=r'inscri|reg').exists()
-                        or 'inscription' in (self.invoice.notes or '').lower()
-                    )
-                    if is_reg:
-                        student = self.invoice.student
-                        if not student.registration_fee_paid:
-                            student.registration_fee_paid = True
-                            student.save(update_fields=['registration_fee_paid'])
-            except Exception:
-                pass
+            # invoice.amount_paid sync + is_enrolled sync both happen in the
+            # on_payment_save signal (apps.finance.signals) — don't duplicate here.
             return True
         return False
 
@@ -562,13 +561,22 @@ class Expense(models.Model):
         return f"{self.label} - {self.amount} FCFA"
 
 
-# Signal to auto-create enrollment when registration fee invoice is created
+# Signal to auto-create enrollment when a student's first tuition invoice is created
 @receiver(post_save, sender=Invoice)
-def create_enrollment_on_registration_invoice(sender, instance, created, **kwargs):
+def create_enrollment_on_first_tuition_invoice(sender, instance, created, **kwargs):
     """
-    Automatically create enrollment when registration fee invoice is created,
-    but ONLY by reusing a class the student was already, genuinely enrolled
-    in before (e.g. a prior academic year) — never by guessing.
+    Automatically create enrollment when a student's scolarité invoice is
+    created, but ONLY by reusing a class the student was already, genuinely
+    enrolled in before (e.g. a prior academic year) — never by guessing.
+
+    Frais d'inscription and frais de scolarité used to be two separate
+    invoices/fee categories, and this signal used to key off the inscription
+    one specifically. They're now merged into a single 'SCOLARITE' fee — this
+    fires off that invoice instead. Historical INSCRIPTION-coded invoices
+    (pre-merge) are intentionally NOT matched here: they can no longer be
+    created going forward (see FeeConfigurationViewSet.perform_create /
+    ensure_student_invoices), so keying off them would just silently never
+    fire.
 
     This used to have a second fallback ("any active class at the site") for
     when the student had no prior enrollment at all — an unordered
@@ -593,12 +601,12 @@ def create_enrollment_on_registration_invoice(sender, instance, created, **kwarg
     if not instance.student:
         return
 
-    # Check if invoice contains registration fee (frais d'inscription)
-    has_registration_fee = instance.items.filter(
-        fee_type__code__icontains='inscription'
+    # Check if invoice contains a scolarité fee item
+    has_tuition_fee = instance.items.filter(
+        fee_type__code='SCOLARITE'
     ).exists()
 
-    if not has_registration_fee:
+    if not has_tuition_fee:
         return
 
     # Import here to avoid circular imports
@@ -676,15 +684,21 @@ class FeeConfiguration(BaseModel):
         help_text="Laisser vide pour appliquer ce barème aux étudiants affectés et non affectés"
     )
     CATEGORY_CHOICES = [
-        ('INSCRIPTION', 'Inscription'),
+        ('INSCRIPTION', 'Inscription (historique)'),
         ('SCOLARITE',   'Scolarité'),
     ]
-    # Inscription and scolarité are two separate barème rows (same
-    # site/programme/niveau/année/modalité/affectation scope, different
-    # fee_category) rather than two amount fields on one row — this lets the
-    # échéancier (FeeInstallment) attach unambiguously to the SCOLARITE row
-    # only, and lets inscription (always paid in full, never in installments)
-    # and scolarité (payable via échéancier) be edited/resolved independently.
+    # Frais d'inscription and frais de scolarité used to be two separate,
+    # permanent barème rows sharing the same site/programme/niveau/année/
+    # modalité/affectation scope, distinguished by fee_category — inscription
+    # was always paid in full, scolarité was payable via échéancier. They've
+    # since been merged into a single concept: a barème is always SCOLARITE
+    # now (enforced in FeeConfigurationViewSet.perform_create), and a student
+    # is "inscrit" once they've paid a configurable minimum (see
+    # get_min_enrollment_payment) toward that one scolarité total instead of
+    # settling a separate inscription invoice. INSCRIPTION rows only remain
+    # as deactivated historical records (see the finance data migration that
+    # folded their amount into the matching SCOLARITE row) — kept for FK
+    # integrity with old invoice items, never created going forward.
     fee_category = models.CharField(
         max_length=20, choices=CATEGORY_CHOICES, default='SCOLARITE', verbose_name="Catégorie"
     )
@@ -840,7 +854,7 @@ def recalculate_invoices_for_fee_config(fee_config, old_amount):
     # The auto-enrollment signal is a guaranteed no-op during a price
     # recalculation (the enrollment already exists) — disconnect it for the
     # duration to avoid 2 wasted queries per invoice save.
-    post_save.disconnect(create_enrollment_on_registration_invoice, sender=Invoice)
+    post_save.disconnect(create_enrollment_on_first_tuition_invoice, sender=Invoice)
     try:
         with transaction.atomic():
             invoices = (
@@ -861,7 +875,7 @@ def recalculate_invoices_for_fee_config(fee_config, old_amount):
                     invoice.save()  # recompute totals/balance/status
                     updated += 1
     finally:
-        post_save.connect(create_enrollment_on_registration_invoice, sender=Invoice)
+        post_save.connect(create_enrollment_on_first_tuition_invoice, sender=Invoice)
 
     return updated
 
@@ -961,23 +975,36 @@ def _resolve_fee_config_for_student(student, academic_year=None):
     )
 
 
-def _scolarite_amount_paid(student):
-    """Sum of amount_paid across only the student's SCOLARITE invoice(s) —
-    NOT every invoice they have. A student normally has a separate
-    INSCRIPTION invoice (paid in full at inscription, no installment plan)
-    alongside their SCOLARITE one; without this scope, that inscription
-    payment (or any other non-tuition invoice) was silently added into the
-    échéancier's "amount paid" figure, understating the real tuition
-    shortfall shown in the échéancier reminder and the dossier's tranche
-    breakdown (e.g. two tranches totalling 800 000 with only 100 000 paid
-    toward scolarité and 500 000 paid toward inscription was reported as a
-    200 000 balance instead of the real 700 000). Shared by
-    compute_tuition_schedule_status and get_student_installment_schedule so
-    they can't drift apart again."""
+def _tuition_amount_paid(student):
+    """Sum of amount_paid across the student's tuition invoice(s) — SCOLARITE
+    plus the now-legacy INSCRIPTION code. Inscription and scolarité used to
+    be billed as two separate invoices; they're merged into one "frais de
+    scolarité" concept now, and old inscription payments count toward the
+    cumulative tuition total (and therefore toward the enrollment threshold
+    and the échéancier) rather than being ignored. Only OTHER, unrelated
+    invoice types (if any exist) are excluded. Shared by
+    compute_tuition_schedule_status, get_student_installment_schedule and
+    sync_enrollment_status so they can't drift apart again."""
     from django.db.models import Sum
     return Invoice.objects.filter(
-        student=student, is_active=True, items__fee_type__code='SCOLARITE',
+        student=student, is_active=True, items__fee_type__code__in=['SCOLARITE', 'INSCRIPTION'],
     ).exclude(status='CANCELLED').distinct().aggregate(s=Sum('amount_paid'))['s'] or 0
+
+
+def sync_enrollment_status(student):
+    """Recompute and self-heal Student.is_enrolled from real invoice data —
+    'inscrit' means having paid at least get_min_enrollment_payment() toward
+    the cumulative tuition total, not settling a separate inscription
+    invoice in full. Mirrors the self-healing pattern the old
+    registration_fee_paid flag used (Payment save, financial_summary, the
+    fee-gate permission) so none of those call sites can disagree. Returns
+    the up-to-date boolean."""
+    paid = _tuition_amount_paid(student)
+    is_enrolled = paid >= get_min_enrollment_payment()
+    if student.is_enrolled != is_enrolled:
+        Student.objects.filter(pk=student.pk).update(is_enrolled=is_enrolled)
+        student.is_enrolled = is_enrolled
+    return is_enrolled
 
 
 def compute_tuition_schedule_status(student, academic_year=None):
@@ -1016,19 +1043,20 @@ def compute_tuition_schedule_status(student, academic_year=None):
     cumulative_due = installments.filter(due_date__lte=grace_cutoff).aggregate(
         s=Sum('amount'))['s'] or 0
 
-    cumulative_paid = _scolarite_amount_paid(student)
+    cumulative_paid = _tuition_amount_paid(student)
 
     result['cumulative_due'] = cumulative_due
     result['cumulative_paid'] = cumulative_paid
-    # Registration fee must be settled first — a brand-new, not-yet-enrolled
-    # student (see the dossier's own "Étape 2 : payer l'inscription" prompt)
-    # has no installment due yet either, so `cumulative_paid >= cumulative_due`
-    # was trivially true (0 >= 0), showing "à jour" for someone who hasn't
-    # paid a single franc and isn't even inscrit. echeance_override still
-    # wins unconditionally — an admin's explicit exemption should never be
-    # second-guessed by the registration-fee check.
+    # The enrollment threshold must be met first — a brand-new student with
+    # no installment due yet would otherwise trivially satisfy
+    # `cumulative_paid >= cumulative_due` (0 >= 0), showing "à jour" for
+    # someone who hasn't paid a single franc and isn't even inscrit.
+    # Computed directly from cumulative_paid (not the cached Student.is_enrolled
+    # flag) so this can never lag behind a payment that hasn't been synced
+    # yet. echeance_override still wins unconditionally — an admin's explicit
+    # exemption should never be second-guessed by the threshold check.
     result['is_up_to_date'] = bool(student.echeance_override) or (
-        student.registration_fee_paid and cumulative_paid >= cumulative_due
+        cumulative_paid >= get_min_enrollment_payment() and cumulative_paid >= cumulative_due
     )
     return result
 
@@ -1064,7 +1092,7 @@ def get_student_installment_schedule(student, academic_year=None):
     today = timezone.now().date()
     grace_cutoff = today - timedelta(days=5)
 
-    cumulative_paid = _scolarite_amount_paid(student)
+    cumulative_paid = _tuition_amount_paid(student)
     result['cumulative_paid'] = cumulative_paid
 
     running_due = 0
@@ -1093,16 +1121,21 @@ def get_student_installment_schedule(student, academic_year=None):
 
 
 def ensure_student_invoices(student, created_by=None):
-    """Create the student's inscription/scolarité invoices from whatever
-    barème currently resolves for their site/enrollment/modality/affectation,
-    if they don't already exist. Shared by:
+    """Create the student's scolarité invoice from whatever barème currently
+    resolves for their site/enrollment/modality/affectation, if it doesn't
+    already exist. Shared by:
       - StudentViewSet.prepare_invoices (explicit "Préparer mon dossier"
         action, student or admin triggered)
       - the post_save signals on Enrollment/Student (apps.finance.signals) —
         so moving a student onto a different barème (new class, or a
-        site/modality/affectation change) automatically creates the invoices
-        for their new scope, instead of leaving Inscription/Scolarité blank
-        until someone happens to click "Préparer mon dossier".
+        site/modality/affectation change) automatically creates the invoice
+        for their new scope, instead of leaving Scolarité blank until
+        someone happens to click "Préparer mon dossier".
+
+    Frais d'inscription and frais de scolarité used to be billed as two
+    separate invoices here; they're merged into a single scolarité invoice
+    now (see get_min_enrollment_payment / sync_enrollment_status for the new
+    "inscrit" threshold rule).
 
     If the student already has an unpaid/unsettled invoice for a fee type,
     its item is re-priced to whatever barème resolves NOW (e.g. moved from
@@ -1148,12 +1181,7 @@ def ensure_student_invoices(student, created_by=None):
         site, level, 'SCOLARITE', current_year,
         modality=student.modality, affectation_status=student.affectation_status
     )
-    registration_config = FeeConfiguration.get_for_enrollment(
-        site, level, 'INSCRIPTION', current_year,
-        modality=student.modality, affectation_status=student.affectation_status
-    )
     tuition_amount = float(tuition_config.amount if tuition_config else (student.tuition_fee or 0))
-    reg_amount = float(registration_config.amount if registration_config else (student.registration_fee or 0))
 
     due_date = (current_year.end_date if getattr(current_year, 'end_date', None)
                 else date.today() + timedelta(days=90))
@@ -1161,10 +1189,6 @@ def ensure_student_invoices(student, created_by=None):
     scolarite_ft, _ = FeeType.objects.get_or_create(
         code='SCOLARITE',
         defaults={'name': 'Frais de scolarité', 'is_recurring': True, 'default_amount': tuition_amount}
-    )
-    inscription_ft, _ = FeeType.objects.get_or_create(
-        code='INSCRIPTION',
-        defaults={'name': "Frais d'inscription", 'is_recurring': False, 'default_amount': reg_amount}
     )
 
     created = 0
@@ -1213,9 +1237,6 @@ def ensure_student_invoices(student, created_by=None):
 
     if tuition_amount > 0:
         _create_or_reprice(scolarite_ft, tuition_amount, f'Frais de scolarité — {current_year.name}')
-
-    if reg_amount > 0 and not student.registration_fee_paid:
-        _create_or_reprice(inscription_ft, reg_amount, f"Frais d'inscription — {current_year.name}")
 
     all_invoices = Invoice.objects.filter(
         student=student, is_active=True

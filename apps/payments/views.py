@@ -325,7 +325,7 @@ class CinetPayDemoPayView(APIView):
     """
     # NOTE: this explicit permission_classes already replaces
     # DEFAULT_PERMISSION_CLASSES entirely (DRF doesn't merge the two), so
-    # IsRegistrationFeePaidOrExempt never runs here regardless — fee_gate_exempt
+    # IsEnrolledOrExempt never runs here regardless — fee_gate_exempt
     # is set anyway for documentation, in case that override is ever removed.
     fee_gate_exempt = True
     permission_classes = [permissions.IsAuthenticated]

@@ -783,22 +783,17 @@ class FeeConfigurationViewSet(viewsets.ModelViewSet):
 
         return qs
 
+    def perform_create(self, serializer):
+        # fee_category is read-only on the serializer (see
+        # FeeConfigurationSerializer) — every barème created through the API
+        # is scolarité now, inscription and scolarité having been merged.
+        serializer.save(fee_category='SCOLARITE')
+
     def perform_update(self, serializer):
-        from rest_framework.exceptions import ValidationError
+        # fee_category is read-only on the serializer, so it can never be
+        # part of validated_data here — nothing left to guard against.
         old = self.get_object()
         old_amount = old.amount
-        # Inscription and Scolarité are two permanent, separate rows sharing
-        # the same site/program/level/year/modality/affectation — fee_category
-        # is part of a barème's identity, not an editable attribute. Silently
-        # flipping it here would repurpose this row (with its existing
-        # invoices/échéancier tranches) into the other category instead of
-        # creating a new one, exactly as happened via the admin UI before the
-        # category selector was locked on edit there.
-        new_category = serializer.validated_data.get('fee_category')
-        if new_category and new_category != old.fee_category:
-            raise ValidationError(
-                {'fee_category': "La catégorie ne peut pas être modifiée après création. Créez un nouveau barème pour l'autre catégorie."}
-            )
         fee_config = serializer.save()
         self._invoices_recalculated = recalculate_invoices_for_fee_config(fee_config, old_amount)
 

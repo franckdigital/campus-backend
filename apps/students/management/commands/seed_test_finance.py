@@ -147,7 +147,7 @@ class Command(BaseCommand):
                         'status': 'ACTIVE',
                         'admission_date': datetime.date(2025, 9, 1),
                         'registration_fee': data['inscr_amount'],
-                        'registration_fee_paid': True,
+                        'is_enrolled': True,
                         'tuition_fee': data['scol_amount'],
                         'total_paid': data['paid_amount'],
                         'remaining_balance': data['scol_amount'] + data['inscr_amount'] - data['paid_amount'],

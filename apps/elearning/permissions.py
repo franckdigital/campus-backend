@@ -7,7 +7,7 @@ class IsTuitionUpToDateOrNotGated(BasePermission):
     assignment submissions, exam sessions) when they're behind on their
     tuition payment schedule (échéancier) — regardless of modality.
 
-    Opposite polarity from apps.students.permissions.IsRegistrationFeePaidOrExempt:
+    Opposite polarity from apps.students.permissions.IsEnrolledOrExempt:
     that one is default-deny-unless-exempted (blocks everything except an
     allowlist); this one is default-ALLOW-unless-the-view-opts-in, since it
     must only block evaluation actions, not lesson/course browsing:

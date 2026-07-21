@@ -124,7 +124,7 @@ class StudentSerializer(serializers.ModelSerializer):
             'admission_date', 'graduation_date', 'emergency_contact_name',
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'current_card', 'current_class',
-            'registration_fee', 'registration_fee_paid', 'tuition_fee',
+            'registration_fee', 'is_enrolled', 'tuition_fee',
             'total_paid', 'remaining_balance', 'echeance_override',
             'is_active', 'created_at', 'updated_at'
         ]
@@ -201,7 +201,7 @@ class StudentCreateSerializer(serializers.ModelSerializer):
         # with zero enrollments every single time, regardless of which
         # classe/filière the admin actually picked in the form. That empty
         # enrollment is exactly what later let a separate signal
-        # (create_enrollment_on_registration_invoice, see apps.finance.models)
+        # (create_enrollment_on_first_tuition_invoice, see apps.finance.models)
         # auto-guess an unrelated class (in practice, always BTS) the moment
         # any invoice was created for the student.
         fields = [
@@ -265,7 +265,7 @@ class StudentListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'matricule', 'full_name', 'email', 'phone',
             'gender', 'site', 'site_name', 'status', 'modality', 'affectation_status', 'is_active',
-            'registration_fee_paid', 'echeance_override', 'program_name',
+            'is_enrolled', 'echeance_override', 'program_name',
             'tuition_up_to_date', 'has_payment_schedule',
         ]
 
@@ -314,7 +314,7 @@ class StudentDossierSerializer(serializers.ModelSerializer):
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'files', 'cards',
             'current_class',
-            'registration_fee', 'registration_fee_paid', 'tuition_fee',
+            'is_enrolled', 'tuition_fee',
             'total_paid', 'remaining_balance', 'echeance_override',
             'tuition_up_to_date', 'has_payment_schedule',
             'is_active', 'created_at', 'updated_at'

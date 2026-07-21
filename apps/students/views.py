@@ -80,7 +80,7 @@ class StudentViewSet(viewsets.ModelViewSet):
     # that's the action that generates their very first invoices (including
     # the registration one), so gating it behind "registration already paid"
     # would make it impossible to ever pay in the first place. Fee-gated on
-    # everything else — see apps.students.permissions.IsRegistrationFeePaidOrExempt.
+    # everything else — see apps.students.permissions.IsEnrolledOrExempt.
     fee_gate_exempt_actions = ('me', 'financial_summary', 'prepare_invoices', 'echeancier')
 
     def get_queryset(self):
@@ -325,8 +325,19 @@ class StudentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='financial-summary')
     def financial_summary(self, request, pk=None):
-        """Compute real financial totals from invoices, with FeeConfiguration as fallback."""
-        from apps.finance.models import Invoice, Payment, FeeConfiguration, resolve_current_enrollment
+        """Compute real financial totals from invoices, with FeeConfiguration as fallback.
+
+        Frais d'inscription and frais de scolarité used to be tracked as two
+        separate totals here; they're merged into a single "scolarité" total
+        now — a student is "inscrit" once their cumulative tuition paid
+        crosses the configurable minimum (get_min_enrollment_payment), not
+        once a separate inscription invoice is settled in full.
+        """
+        from apps.finance.models import (
+            Invoice, Payment, FeeConfiguration, resolve_current_enrollment,
+            compute_tuition_schedule_status, sync_enrollment_status,
+            get_min_enrollment_payment,
+        )
         from django.db.models import Sum
 
         student = self.get_object()
@@ -335,38 +346,19 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         total_tuition  = float(invoices.aggregate(t=Sum('total'))['t']       or 0)
         total_paid     = float(invoices.aggregate(p=Sum('amount_paid'))['p'] or 0)
-
-        # Separate tuition-only vs inscription totals using fee_type codes
-        inscription_invoice_ids = list(
-            invoices.filter(items__fee_type__code__iregex=r'inscri|reg')
-            .distinct().values_list('id', flat=True)
-        )
-        inscription_qs = invoices.filter(id__in=inscription_invoice_ids)
-        total_registration_invoiced = float(inscription_qs.aggregate(t=Sum('total'))['t'] or 0)
-        total_tuition_only          = total_tuition - total_registration_invoiced
-
-        # Registration paid = student flag OR inscription invoice fully paid (balance = 0)
-        reg_balance = float(inscription_qs.aggregate(b=Sum('balance'))['b'] or 0) if inscription_invoice_ids else None
-        dynamic_reg_paid = reg_balance is not None and reg_balance <= 0
-        registration_fee_paid = student.registration_fee_paid or dynamic_reg_paid
-
-        # Auto-sync the student flag so getMe() stays consistent
-        if dynamic_reg_paid and not student.registration_fee_paid:
-            Student.objects.filter(pk=student.pk).update(registration_fee_paid=True)
+        total_balance  = float(invoices.aggregate(b=Sum('balance'))['b']     or 0)
 
         total_pending  = float(
             Payment.objects.filter(
                 invoice__student=student, status='PENDING', is_active=True
             ).aggregate(p=Sum('amount'))['p'] or 0
         )
-        # Use configured amount as base when no invoices exist yet
         has_invoices = invoices.exists()
 
         # Look up FeeConfiguration — try enrollment level first, fall back to site-only
         import logging
         logger = logging.getLogger(__name__)
         configured_tuition = float(student.tuition_fee or 0)
-        configured_registration = float(student.registration_fee or 0)
         try:
             # Same resolver as ensure_student_invoices/_resolve_fee_config_for_student
             # (apps.finance.models) — status=ENROLLED + most-recent, so this can never
@@ -390,20 +382,13 @@ class StudentViewSet(viewsets.ModelViewSet):
                     except Exception as e:
                         logger.warning('financial_summary: cannot load academic_year %s: %s', academic_year_id, e)
             # Always attempt lookup — get_for_enrollment falls back to site-only when level=None.
-            # Inscription and scolarité are separate barème rows now — resolve each independently.
             tuition_config = FeeConfiguration.get_for_enrollment(
                 student.site, level, 'SCOLARITE', academic_year,
                 modality=student.modality, affectation_status=student.affectation_status
             )
-            registration_config = FeeConfiguration.get_for_enrollment(
-                student.site, level, 'INSCRIPTION', academic_year,
-                modality=student.modality, affectation_status=student.affectation_status
-            )
             if tuition_config:
                 configured_tuition = float(tuition_config.amount)
-            if registration_config:
-                configured_registration = float(registration_config.amount)
-            if not tuition_config and not registration_config:
+            elif not has_invoices:
                 level_id = str(level.id) if level else None
                 year_id = str(academic_year.id) if academic_year else None
                 logger.info(
@@ -414,49 +399,22 @@ class StudentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error('financial_summary: unexpected error: %s', e, exc_info=True)
 
-        # Whether a SCOLARITE invoice specifically exists — a student can have
-        # an inscription invoice (billed/paid) with no scolarité invoice yet.
-        # Gating scolarité on "has_invoices" (any invoice of either category)
-        # collapsed a correctly-resolved barème amount to 0 as soon as the
-        # inscription invoice existed, even though scolarité was never billed.
-        tuition_invoices = invoices.exclude(id__in=inscription_invoice_ids)
-        has_tuition_invoices = tuition_invoices.exists()
-        tuition_balance = float(tuition_invoices.aggregate(b=Sum('balance'))['b'] or 0) \
-            if has_tuition_invoices else configured_tuition
-        registration_balance = reg_balance if reg_balance is not None else configured_registration
+        # Prefer the real invoiced total once billed; fall back to the live
+        # barème guess only when nothing has been invoiced yet.
+        effective_tuition = total_tuition if has_invoices else configured_tuition
+        remaining = total_balance if has_invoices else configured_tuition
 
-        # Grand total (scolarité + inscription) — each side independently uses
-        # its own real invoice total when billed, or the barème's configured
-        # amount when not yet invoiced.
-        effective_tuition = (total_registration_invoiced if inscription_invoice_ids else configured_registration) \
-            + (total_tuition_only if has_tuition_invoices else configured_tuition)
-        # Tuition only (scolarité, sans inscription)
-        effective_tuition_only = total_tuition_only if has_tuition_invoices else configured_tuition
-        # Registration only (inscription) — same rule as tuition just above:
-        # prefer the real invoiced total once one exists. The 'registration_fee'
-        # response field used to always be configured_registration (the live
-        # barème guess) even when a real inscription invoice already existed —
-        # so an admin who explicitly picked/typed a specific amount on the
-        # invoice (e.g. a barème the list-picker resolved for their exact
-        # choice) saw the dossier header silently show a *different*, live
-        # re-guessed amount instead — wrong whenever that guess depends on the
-        # student's current enrollment being correct, which it may not be.
-        effective_registration = total_registration_invoiced if inscription_invoice_ids else configured_registration
-        remaining = registration_balance + tuition_balance
-
-        from apps.finance.models import compute_tuition_schedule_status
         schedule_status = compute_tuition_schedule_status(student)
+        is_enrolled = sync_enrollment_status(student)
 
         return Response({
-            'tuition_fee':              effective_tuition,           # grand total all fees
-            'tuition_fee_only':         effective_tuition_only,      # scolarité uniquement
+            'tuition_fee':              effective_tuition,
             'total_paid':               total_paid,
             'remaining_balance':        remaining,
             'total_pending':            total_pending,
-            'registration_fee':         effective_registration,
-            'registration_fee_paid':    registration_fee_paid,       # computed from invoices + student flag
+            'is_enrolled':              is_enrolled,                 # computed from invoices, self-healing
+            'min_enrollment_payment':   float(get_min_enrollment_payment()),
             'configured_tuition_fee':   configured_tuition,
-            'configured_registration_fee': configured_registration,
             'has_invoices':             has_invoices,
             'has_payment_schedule':     schedule_status['has_schedule'],
             'tuition_up_to_date':       schedule_status['is_up_to_date'],
@@ -495,7 +453,7 @@ class StudentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='prepare-invoices')
     def prepare_invoices(self, request, pk=None):
-        """Create inscription and/or scolarité invoices if they don't exist yet.
+        """Create the student's scolarité invoice if it doesn't exist yet.
 
         Delegates to apps.finance.models.ensure_student_invoices, which is
         also called automatically by the Enrollment/Student post_save signals

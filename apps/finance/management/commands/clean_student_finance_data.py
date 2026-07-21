@@ -67,10 +67,10 @@ class Command(BaseCommand):
             deleted_payments = payments.delete()[0]
             deleted_items = items.delete()[0]
             deleted_invoices = invoices.delete()[0]
-            student.registration_fee_paid = False
+            student.is_enrolled = False
             student.total_paid = 0
             student.remaining_balance = student.registration_fee + student.tuition_fee
-            student.save(update_fields=['registration_fee_paid', 'total_paid', 'remaining_balance'])
+            student.save(update_fields=['is_enrolled', 'total_paid', 'remaining_balance'])
 
         self.stdout.write(self.style.SUCCESS(
             f'\nDone. Deleted {deleted_payments} payment(s), {deleted_items} invoice item(s), '

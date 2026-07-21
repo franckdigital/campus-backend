@@ -106,9 +106,9 @@ class Command(BaseCommand):
             keep.calculate_totals()
             keep.save(update_fields=['subtotal', 'total', 'amount_paid', 'balance', 'status'])
 
-            if category == 'INSCRIPTION' and keep.balance <= 0 and not student.registration_fee_paid:
-                student.registration_fee_paid = True
-                student.save(update_fields=['registration_fee_paid'])
+            if category == 'INSCRIPTION' and keep.balance <= 0 and not student.is_enrolled:
+                student.is_enrolled = True
+                student.save(update_fields=['is_enrolled'])
 
         self.stdout.write(self.style.SUCCESS(
             f'\nFait. {len(moved_payments)} paiement(s) déplacé(s) vers {keep.invoice_number}. '

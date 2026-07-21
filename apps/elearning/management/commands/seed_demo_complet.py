@@ -161,7 +161,7 @@ class Command(BaseCommand):
                     emergency_contact_name=f'{p_first} {p_last}',
                     emergency_contact_phone=p_tel,
                     emergency_contact_relation='PARENT',
-                    registration_fee=75000, registration_fee_paid=False,
+                    registration_fee=75000, is_enrolled=False,
                     tuition_fee=500000, total_paid=0, remaining_balance=500000,
                 ),
             )
@@ -235,7 +235,7 @@ class Command(BaseCommand):
                     emergency_contact_name=f'{p_first} {p_last}',
                     emergency_contact_phone=p_tel,
                     emergency_contact_relation='PARENT',
-                    registration_fee=75000, registration_fee_paid=False,
+                    registration_fee=75000, is_enrolled=False,
                     tuition_fee=350000, total_paid=0, remaining_balance=350000,
                 ),
             )

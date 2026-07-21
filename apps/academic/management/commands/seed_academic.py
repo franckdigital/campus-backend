@@ -767,7 +767,7 @@ class Command(BaseCommand):
                         'status': 'ACTIVE',
                         'admission_date': datetime.date(2025, 9, 1),
                         'registration_fee': 150000,
-                        'registration_fee_paid': random.random() > 0.1,
+                        'is_enrolled': random.random() > 0.1,
                         'tuition_fee': 1800000,
                         'total_paid': random.randint(900000, 1800000),
                         'remaining_balance': 0,

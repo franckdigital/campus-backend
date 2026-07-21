@@ -12,7 +12,7 @@ This command finds a student's non-cancelled INSCRIPTION invoices; if there
 is more than one, it keeps the "best" one (prefer PAID, else the one with
 the most amount_paid) and cancels the rest — CANCELLED invoices are already
 excluded from every total/aggregate in the app, no other code changes
-needed. Then syncs Student.registration_fee_paid from the kept invoice.
+needed. Then syncs Student.is_enrolled from the kept invoice.
 
 Usage:
     python manage.py fix_duplicate_registration_invoice --email ibrahim.coulibaly@escam-test.ci            # dry-run
@@ -75,11 +75,11 @@ class Command(BaseCommand):
         for inv in to_cancel:
             self.stdout.write(f'  Would cancel: {inv.invoice_number} (total={inv.total}, paid={inv.amount_paid}, status={inv.status})')
 
-        new_registration_fee_paid = keep.balance <= 0
+        new_is_enrolled = keep.balance <= 0
 
         if not confirm:
             self.stdout.write(self.style.WARNING(
-                f'\nDry-run only — no changes made. Would also set registration_fee_paid={new_registration_fee_paid}. '
+                f'\nDry-run only — no changes made. Would also set is_enrolled={new_is_enrolled}. '
                 'Re-run with --yes to execute.'
             ))
             return
@@ -88,11 +88,11 @@ class Command(BaseCommand):
             for inv in to_cancel:
                 inv.status = 'CANCELLED'
                 inv.save()
-            if student.registration_fee_paid != new_registration_fee_paid:
-                student.registration_fee_paid = new_registration_fee_paid
-                student.save(update_fields=['registration_fee_paid'])
+            if student.is_enrolled != new_is_enrolled:
+                student.is_enrolled = new_is_enrolled
+                student.save(update_fields=['is_enrolled'])
 
         self.stdout.write(self.style.SUCCESS(
             f'\nDone. Cancelled {len(to_cancel)} duplicate invoice(s), kept {keep.invoice_number}. '
-            f'registration_fee_paid={new_registration_fee_paid}.'
+            f'is_enrolled={new_is_enrolled}.'
         ))

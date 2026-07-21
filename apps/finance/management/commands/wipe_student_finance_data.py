@@ -1,7 +1,7 @@
 """
 DESTRUCTIVE — wipes all student financial transaction data system-wide:
 every Payment, InvoiceItem, Invoice and CashTransaction row, and resets each
-Student's financial snapshot fields (registration_fee_paid, total_paid,
+Student's financial snapshot fields (is_enrolled, total_paid,
 remaining_balance) back to their defaults.
 
 Does NOT touch FeeConfiguration (the barème) or Student.registration_fee /
@@ -9,7 +9,7 @@ Student.tuition_fee (the student's assigned base-fee snapshot, not
 transactional history) — those are configuration, not "financial data"
 resulting from payments.
 
-⚠️ Interaction to be aware of: this resets registration_fee_paid=False for
+⚠️ Interaction to be aware of: this resets is_enrolled=False for
 EVERY student. Combined with the registration-fee access gate
 (apps.students.permissions.IsRegistrationFeePaidOrExempt), every currently
 active/already-paid student will be locked out of the whole app immediately
@@ -43,7 +43,7 @@ class Command(BaseCommand):
         item_count = InvoiceItem.objects.count()
         invoice_count = Invoice.objects.count()
         cash_tx_count = CashTransaction.objects.count()
-        student_count = Student.objects.filter(registration_fee_paid=True).count()
+        student_count = Student.objects.filter(is_enrolled=True).count()
 
         self.stdout.write(self.style.WARNING(
             '\n=== wipe_student_finance_data ===\n'
@@ -54,7 +54,7 @@ class Command(BaseCommand):
         self.stdout.write(f'  InvoiceItem rows to delete:       {item_count}')
         self.stdout.write(f'  Invoice rows to delete:           {invoice_count}')
         self.stdout.write(f'  CashTransaction rows to delete:   {cash_tx_count}')
-        self.stdout.write(f'  Students to reset (currently registration_fee_paid=True): {student_count}')
+        self.stdout.write(f'  Students to reset (currently is_enrolled=True): {student_count}')
 
         if not confirm:
             self.stdout.write(self.style.WARNING(
@@ -68,7 +68,7 @@ class Command(BaseCommand):
             deleted_items = InvoiceItem.objects.all().delete()[0]
             deleted_invoices = Invoice.objects.all().delete()[0]
             updated_students = Student.objects.update(
-                registration_fee_paid=False, total_paid=0, remaining_balance=0,
+                is_enrolled=False, total_paid=0, remaining_balance=0,
             )
 
         self.stdout.write(self.style.SUCCESS(

@@ -169,12 +169,8 @@ def _auto_create_cash_transaction(instance):
 
     # Human-readable description
     inv = instance.invoice
-    is_inscription = inv.items.filter(
-        fee_type__code__iregex=r'inscri|reg'
-    ).exists()
-    fee_label = "Frais d'inscription" if is_inscription else "Frais de scolarité"
     student_name = student.user.full_name or str(student)
-    description = f"{fee_label} — {student_name} (facture {inv.invoice_number})"
+    description = f"Frais de scolarité — {student_name} (facture {inv.invoice_number})"
 
     ref_date = instance.created_at.strftime('%Y%m%d') if instance.created_at else ''
     reference = f"PAY-{ref_date}-{str(instance.id)[:8].upper()}"
@@ -204,6 +200,7 @@ def on_payment_save(sender, instance, created, **kwargs):
     """
     When a payment reaches status=SUCCESS:
     - Sync the invoice's amount_paid/balance/status from all SUCCESS payments
+    - Sync the student's is_enrolled flag from cumulative tuition paid
     - Push-notify student and parents
     - Auto-create a CashTransaction IN on the site's cash register
       (auto-opens a session if none is active)
@@ -234,6 +231,17 @@ def on_payment_save(sender, instance, created, **kwargs):
     except Exception as exc:
         logger.error(
             "Invoice sync failed for payment %s: %s", instance.id, exc, exc_info=True,
+        )
+
+    # ── Sync is_enrolled from cumulative tuition paid vs the configurable
+    # minimum threshold — a student is "inscrit" as soon as this payment
+    # crosses it, no separate inscription invoice involved anymore. ────────
+    try:
+        from .models import sync_enrollment_status
+        sync_enrollment_status(instance.invoice.student)
+    except Exception as exc:
+        logger.error(
+            "Enrollment status sync failed for payment %s: %s", instance.id, exc, exc_info=True,
         )
 
     # ── Notifications (in-app + push) ────────────────────────────────────

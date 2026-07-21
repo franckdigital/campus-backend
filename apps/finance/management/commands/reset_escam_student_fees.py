@@ -129,9 +129,9 @@ class Command(BaseCommand):
                     scol_invoice.status = 'PENDING'
                     scol_invoice.save(update_fields=['status'])
 
-                student.registration_fee_paid = False
+                student.is_enrolled = False
                 student.total_paid = 0
                 student.remaining_balance = inscr_amount + scol_amount
-                student.save(update_fields=['registration_fee_paid', 'total_paid', 'remaining_balance'])
+                student.save(update_fields=['is_enrolled', 'total_paid', 'remaining_balance'])
 
         self.stdout.write(self.style.SUCCESS(f'\nOK. {len(plan)} etudiant(s) reinitialise(s) selon le bareme actuel.'))
