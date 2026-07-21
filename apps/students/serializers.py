@@ -115,6 +115,12 @@ class StudentSerializer(serializers.ModelSerializer):
     parents = serializers.SerializerMethodField()
     current_card = serializers.SerializerMethodField()
     current_class = serializers.SerializerMethodField()
+    # Editable — an admin correcting a wrong/duplicate matricule (e.g. a
+    # transfer student re-keyed under the wrong year prefix) needs to be able
+    # to change it after creation, not just at StudentCreateSerializer time.
+    matricule = serializers.CharField(
+        validators=[UniqueValidator(queryset=Student.objects.all(), message="Ce matricule est déjà utilisé.")]
+    )
 
     class Meta:
         model = Student
@@ -128,7 +134,7 @@ class StudentSerializer(serializers.ModelSerializer):
             'total_paid', 'remaining_balance', 'echeance_override',
             'is_active', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'matricule', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
     def update(self, instance, validated_data):
         user_data = validated_data.pop('user_data', None)
