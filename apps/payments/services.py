@@ -95,8 +95,8 @@ class CinetPayService:
         if getattr(settings, 'CINETPAY_LOCAL_SANDBOX', False):
             # This mock page is served by THIS Django backend, not the
             # frontend SPA — settings.FRONTEND_URL points at the wrong host
-            # (e.g. campus.numerix.digital instead of
-            # api-campus.numerix.digital), which opens a blank page since
+            # (e.g. escam.net instead of
+            # api.escam.net), which opens a blank page since
             # that server doesn't have this route at all. notify_url is
             # already guaranteed to point at this backend (CinetPay's real
             # webhook must reach it), so derive the origin from it instead.
@@ -105,7 +105,7 @@ class CinetPayService:
             backend_root = (
                 f"{parsed.scheme}://{parsed.netloc}"
                 if parsed and parsed.netloc
-                else getattr(settings, 'FRONTEND_URL', 'https://api-campus.numerix.digital')
+                else getattr(settings, 'FRONTEND_URL', 'https://api.escam.net')
             )
             mock_url = (
                 f"{backend_root}/api/v1/payments/cinetpay/sandbox-success/"
