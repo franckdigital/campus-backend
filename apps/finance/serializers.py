@@ -265,7 +265,7 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
         return obj.level.name if obj.level_id and obj.level else None
 
     def get_cycle_name(self, obj):
-        return obj.get_cycle_display() if obj.cycle else None
+        return obj.cycle.name if obj.cycle_id and obj.cycle else None
 
     def get_academic_year_name(self, obj):
         return obj.academic_year.name if obj.academic_year_id and obj.academic_year else None

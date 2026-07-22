@@ -669,20 +669,14 @@ class FeeConfiguration(BaseModel):
         'academic.Level', on_delete=models.CASCADE, related_name='fee_configurations',
         null=True, blank=True, verbose_name="Niveau"
     )
-    # Duplicated from academic.Level.CYCLE_CHOICES (cross-app import avoided,
-    # same reason as MODALITY_CHOICES/AFFECTATION_CHOICES above) — set instead
-    # of level/program when a barème should apply to every filière's students
-    # at a given promotion year (e.g. "tous les Licence 3"). Mutually exclusive
-    # with level in practice (enforced by the admin form, not the DB) — a
-    # level-scoped row always wins over a cycle-scoped one, see get_for_enrollment.
-    CYCLE_CHOICES = [
-        ('L1', 'Licence 1'), ('L2', 'Licence 2'), ('L3', 'Licence 3'),
-        ('BTS1', 'BTS 1'), ('BTS2', 'BTS 2'),
-        ('DUT1', 'DUT 1'), ('DUT2', 'DUT 2'),
-        ('M1', 'Master 1'), ('M2', 'Master 2'),
-    ]
-    cycle = models.CharField(
-        max_length=10, choices=CYCLE_CHOICES, null=True, blank=True, verbose_name="Cycle"
+    # Set instead of level/program when a barème should apply to every
+    # filière's students at a given promotion year (e.g. "tous les Licence
+    # 3"). Mutually exclusive with level in practice (enforced by the admin
+    # form, not the DB) — a level-scoped row always wins over a cycle-scoped
+    # one, see get_for_enrollment.
+    cycle = models.ForeignKey(
+        'academic.Cycle', on_delete=models.SET_NULL, related_name='fee_configurations',
+        null=True, blank=True, verbose_name="Cycle"
     )
     academic_year = models.ForeignKey(
         AcademicYear, on_delete=models.CASCADE, related_name='fee_configurations',
@@ -731,7 +725,7 @@ class FeeConfiguration(BaseModel):
         parts = [self.get_fee_category_display(),
                  self.site.name if self.site else 'Tous sites',
                  self.program.name if self.program else 'Toutes filières',
-                 self.level.name if self.level else (self.get_cycle_display() if self.cycle else 'Tous niveaux'),
+                 self.level.name if self.level else (self.cycle.name if self.cycle else 'Tous niveaux'),
                  self.get_modality_display() if self.modality else 'Toutes modalités',
                  self.get_affectation_status_display() if self.affectation_status else 'Toutes affectations']
         return ' / '.join(parts)

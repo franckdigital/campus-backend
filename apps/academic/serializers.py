@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import (
-    Program, Level, Class, Subject, TeacherProfile, TeacherSite,
+    Program, Level, Cycle, Class, Subject, TeacherProfile, TeacherSite,
     ClassSubjectTeacher, Enrollment, Room, Session, Semester, LevelSubject,
     TeacherDocument, TeacherExperience,
 )
@@ -32,10 +32,20 @@ class ProgramSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+class CycleSerializer(serializers.ModelSerializer):
+    # Populated by an annotate(levels_count=Count(...)) on the ViewSet's queryset.
+    levels_count = serializers.IntegerField(read_only=True, default=0)
+
+    class Meta:
+        model = Cycle
+        fields = ['id', 'name', 'code', 'order', 'levels_count', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
 class LevelSerializer(serializers.ModelSerializer):
     program_name = serializers.CharField(source='program.name', read_only=True)
     program_code = serializers.CharField(source='program.code', read_only=True)
-    cycle_display = serializers.CharField(source='get_cycle_display', read_only=True, default=None)
+    cycle_display = serializers.CharField(source='cycle.name', read_only=True, default=None)
     # Populated by annotate(classes_count=..., subjects_count=...) on the
     # ViewSet's queryset instead of two per-row .count() queries.
     classes_count = serializers.IntegerField(read_only=True, default=0)

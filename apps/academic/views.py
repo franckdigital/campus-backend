@@ -8,12 +8,12 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Count, Q
 
 from .models import (
-    Program, Level, Class, Subject, TeacherProfile, TeacherSite,
+    Program, Level, Cycle, Class, Subject, TeacherProfile, TeacherSite,
     ClassSubjectTeacher, Enrollment, Room, Session, Semester, LevelSubject,
     TeacherDocument, TeacherExperience,
 )
 from .serializers import (
-    ProgramSerializer, LevelSerializer, SubjectSerializer,
+    ProgramSerializer, LevelSerializer, CycleSerializer, SubjectSerializer,
     TeacherProfileSerializer, TeacherProfileCreateSerializer, TeacherListSerializer,
     TeacherSiteSerializer, ClassSerializer, ClassListSerializer,
     ClassSubjectTeacherSerializer, EnrollmentSerializer,
@@ -71,6 +71,17 @@ class ProgramViewSet(viewsets.ModelViewSet):
         levels = program.levels.all()
         serializer = LevelSerializer(levels, many=True)
         return Response(serializer.data)
+
+
+class CycleViewSet(viewsets.ModelViewSet):
+    queryset = Cycle.objects.annotate(
+        levels_count=Count('levels', filter=Q(levels__is_active=True), distinct=True),
+    ).all()
+    serializer_class = CycleSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['name', 'code']
+    ordering_fields = ['order', 'name']
+    filterset_fields = ['is_active']
 
 
 class LevelViewSet(viewsets.ModelViewSet):
