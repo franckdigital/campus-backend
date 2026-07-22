@@ -1108,6 +1108,21 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     # (browsing/listing exams is unaffected — see apps.elearning.permissions).
     tuition_gate_actions = ('start_session',)
 
+    def get_queryset(self):
+        # TeacherScopedContentMixin only restricts TEACHER requesters — a
+        # STUDENT fell through as "unrestricted", seeing every exam from
+        # every class/filière in the school (including ones created for a
+        # class they were never enrolled in), not just their own class's
+        # scheduled exams. Admin/staff and teachers are unaffected here.
+        qs = super().get_queryset()
+        student = getattr(self.request.user, 'student_profile', None)
+        if student:
+            class_ids = student.enrollments.filter(
+                status='ENROLLED', is_active=True
+            ).values_list('class_obj_id', flat=True)
+            qs = qs.filter(class_obj_id__in=class_ids)
+        return qs
+
     def get_serializer_context(self):
         context = super().get_serializer_context()
         # Pre-fetch this student's exam sessions once for the whole list
