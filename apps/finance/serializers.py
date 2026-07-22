@@ -248,6 +248,7 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
     site_name = serializers.SerializerMethodField()
     program_name = serializers.SerializerMethodField()
     level_name = serializers.SerializerMethodField()
+    cycle_name = serializers.SerializerMethodField()
     academic_year_name = serializers.SerializerMethodField()
     modality_name = serializers.SerializerMethodField()
     affectation_status_name = serializers.SerializerMethodField()
@@ -262,6 +263,9 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
 
     def get_level_name(self, obj):
         return obj.level.name if obj.level_id and obj.level else None
+
+    def get_cycle_name(self, obj):
+        return obj.get_cycle_display() if obj.cycle else None
 
     def get_academic_year_name(self, obj):
         return obj.academic_year.name if obj.academic_year_id and obj.academic_year else None
@@ -279,7 +283,7 @@ class FeeConfigurationSerializer(serializers.ModelSerializer):
         model = FeeConfiguration
         fields = [
             'id', 'site', 'site_name', 'program', 'program_name',
-            'level', 'level_name', 'academic_year', 'academic_year_name',
+            'level', 'level_name', 'cycle', 'cycle_name', 'academic_year', 'academic_year_name',
             'modality', 'modality_name', 'affectation_status', 'affectation_status_name',
             'fee_category', 'fee_category_name', 'amount', 'label', 'is_active',
             'installments',

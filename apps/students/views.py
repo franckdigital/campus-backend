@@ -359,6 +359,7 @@ class StudentViewSet(viewsets.ModelViewSet):
         import logging
         logger = logging.getLogger(__name__)
         configured_tuition = float(student.tuition_fee or 0)
+        tuition_config = None
         try:
             # Same resolver as ensure_student_invoices/_resolve_fee_config_for_student
             # (apps.finance.models) — status=ENROLLED + most-recent, so this can never
@@ -407,6 +408,18 @@ class StudentViewSet(viewsets.ModelViewSet):
         schedule_status = compute_tuition_schedule_status(student)
         is_enrolled = sync_enrollment_status(student)
 
+        # Human-readable name of whichever barème actually priced this student
+        # — shown read-only in the student form/dossier so an admin can see
+        # e.g. "Barème Licence 3" was applied via cycle, not just a number.
+        tuition_config_label = None
+        if tuition_config:
+            tuition_config_label = tuition_config.label or (
+                f"Cycle : {tuition_config.get_cycle_display()}" if tuition_config.cycle
+                else tuition_config.level.name if tuition_config.level
+                else tuition_config.program.name if tuition_config.program
+                else 'Barème général'
+            )
+
         return Response({
             'tuition_fee':              effective_tuition,
             'total_paid':               total_paid,
@@ -415,6 +428,7 @@ class StudentViewSet(viewsets.ModelViewSet):
             'is_enrolled':              is_enrolled,                 # computed from invoices, self-healing
             'min_enrollment_payment':   float(get_min_enrollment_payment()),
             'configured_tuition_fee':   configured_tuition,
+            'tuition_config_label':     tuition_config_label,
             'has_invoices':             has_invoices,
             'has_payment_schedule':     schedule_status['has_schedule'],
             'tuition_up_to_date':       schedule_status['is_up_to_date'],
