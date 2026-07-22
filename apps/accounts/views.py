@@ -1,5 +1,7 @@
+from django.db.models import ProtectedError
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -105,8 +107,20 @@ class UserViewSet(viewsets.ModelViewSet):
         return UserSerializer
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
+        # Permanent deletion — cascades to the linked Student/Teacher/Parent
+        # profile (OneToOneField(..., on_delete=CASCADE)) and everything
+        # under it (enrollments, grades, attendance...). Invoice.student is
+        # on_delete=PROTECT specifically so a student with any billing
+        # history can't be silently wiped this way — surface that as a
+        # clear 400 instead of DRF's generic 500, telling the admin to
+        # deactivate instead when they hit it.
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise ValidationError({
+                'detail': "Impossible de supprimer définitivement : cet utilisateur a des factures ou d'autres "
+                          "données financières liées. Désactivez le compte à la place."
+            })
 
     @action(detail=True, methods=['post'], url_path='reset-password')
     def reset_password(self, request, pk=None):
