@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import SimpleRouter as DefaultRouter
 from .views import (
-    ProgramViewSet, LevelViewSet, SubjectViewSet, TeacherViewSet,
+    ProgramViewSet, LevelViewSet, CycleViewSet, SubjectViewSet, TeacherViewSet,
     ClassViewSet, EnrollmentViewSet, RoomViewSet, SessionViewSet, SemesterViewSet,
     LevelSubjectViewSet, ClassSubjectTeacherViewSet,
 )
@@ -10,6 +10,7 @@ router = DefaultRouter()
 router.register(r'semesters', SemesterViewSet, basename='semester')
 router.register(r'programs', ProgramViewSet, basename='program')
 router.register(r'levels', LevelViewSet, basename='level')
+router.register(r'cycles', CycleViewSet, basename='cycle')
 router.register(r'subjects', SubjectViewSet, basename='subject')
 router.register(r'teachers', TeacherViewSet, basename='teacher')
 router.register(r'classes', ClassViewSet, basename='class')
