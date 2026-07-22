@@ -35,6 +35,7 @@ class ProgramSerializer(serializers.ModelSerializer):
 class LevelSerializer(serializers.ModelSerializer):
     program_name = serializers.CharField(source='program.name', read_only=True)
     program_code = serializers.CharField(source='program.code', read_only=True)
+    cycle_display = serializers.CharField(source='get_cycle_display', read_only=True, default=None)
     # Populated by annotate(classes_count=..., subjects_count=...) on the
     # ViewSet's queryset instead of two per-row .count() queries.
     classes_count = serializers.IntegerField(read_only=True, default=0)
@@ -43,7 +44,7 @@ class LevelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Level
         fields = [
-            'id', 'name', 'code', 'order', 'program', 'program_name', 'program_code',
+            'id', 'name', 'code', 'order', 'cycle', 'cycle_display', 'program', 'program_name', 'program_code',
             'classes_count', 'subjects_count', 'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

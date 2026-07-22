@@ -669,6 +669,21 @@ class FeeConfiguration(BaseModel):
         'academic.Level', on_delete=models.CASCADE, related_name='fee_configurations',
         null=True, blank=True, verbose_name="Niveau"
     )
+    # Duplicated from academic.Level.CYCLE_CHOICES (cross-app import avoided,
+    # same reason as MODALITY_CHOICES/AFFECTATION_CHOICES above) — set instead
+    # of level/program when a barème should apply to every filière's students
+    # at a given promotion year (e.g. "tous les Licence 3"). Mutually exclusive
+    # with level in practice (enforced by the admin form, not the DB) — a
+    # level-scoped row always wins over a cycle-scoped one, see get_for_enrollment.
+    CYCLE_CHOICES = [
+        ('L1', 'Licence 1'), ('L2', 'Licence 2'), ('L3', 'Licence 3'),
+        ('BTS1', 'BTS 1'), ('BTS2', 'BTS 2'),
+        ('DUT1', 'DUT 1'), ('DUT2', 'DUT 2'),
+        ('M1', 'Master 1'), ('M2', 'Master 2'),
+    ]
+    cycle = models.CharField(
+        max_length=10, choices=CYCLE_CHOICES, null=True, blank=True, verbose_name="Cycle"
+    )
     academic_year = models.ForeignKey(
         AcademicYear, on_delete=models.CASCADE, related_name='fee_configurations',
         null=True, blank=True, verbose_name="Année académique"
@@ -716,7 +731,7 @@ class FeeConfiguration(BaseModel):
         parts = [self.get_fee_category_display(),
                  self.site.name if self.site else 'Tous sites',
                  self.program.name if self.program else 'Toutes filières',
-                 self.level.name if self.level else 'Tous niveaux',
+                 self.level.name if self.level else (self.get_cycle_display() if self.cycle else 'Tous niveaux'),
                  self.get_modality_display() if self.modality else 'Toutes modalités',
                  self.get_affectation_status_display() if self.affectation_status else 'Toutes affectations']
         return ' / '.join(parts)
@@ -800,9 +815,34 @@ class FeeConfiguration(BaseModel):
                 if cfg:
                     return cfg
 
-        # No barème configured for this level/program at all — deliberately
-        # NOT falling back to a site-wide/global (program=None) row here, see
-        # the docstring above. Callers treat None as "not configured yet".
+        # ── Cycle-scoped tiers (program=None, level=None rows) — a school
+        # can configure a single "tous les Licence 3" barème instead of one
+        # per filière; tried only once neither an exact level nor an exact
+        # program barème exists, so a filière-specific override still wins.
+        # Still never falls back to a truly unscoped (cycle=None) row — see
+        # the "no site-wide/global fallback" rationale above, which applies
+        # just as much across cycles as across programs.
+        cycle = level.cycle if level and level.cycle else None
+        if cycle:
+            cycle_filters = [
+                dict(modality=modality, affectation_status=affectation_status),
+                dict(affectation_status=affectation_status),
+                dict(modality=modality),
+                dict(),
+            ]
+            for extra in cycle_filters:
+                if academic_year:
+                    cfg = _first(site=site, cycle=cycle, program=None, level=None, academic_year=academic_year, **extra)
+                    if cfg:
+                        return cfg
+                cfg = _first(site=site, cycle=cycle, program=None, level=None, academic_year=None, **extra)
+                if cfg:
+                    return cfg
+
+        # No barème configured for this level/program/cycle at all —
+        # deliberately NOT falling back to a site-wide/global (program=None,
+        # cycle=None) row here, see the docstring above. Callers treat None
+        # as "not configured yet".
         return None
 
 
@@ -845,6 +885,15 @@ def recalculate_invoices_for_fee_config(fee_config, old_amount):
         students = students.filter(
             enrollments__status='ENROLLED', enrollments__is_active=True,
             enrollments__class_obj__level__program_id=fee_config.program_id,
+        )
+    elif fee_config.cycle:
+        # Cycle-scoped barème (e.g. "tous les Licence 3") — without this
+        # branch, editing its amount would fall through to the unscoped
+        # site/modality/affectation filter above and silently recalculate
+        # OTHER levels' unpaid invoices too (e.g. every student at the site).
+        students = students.filter(
+            enrollments__status='ENROLLED', enrollments__is_active=True,
+            enrollments__class_obj__level__cycle=fee_config.cycle,
         )
     if fee_config.academic_year_id:
         students = students.filter(enrollments__academic_year_id=fee_config.academic_year_id)

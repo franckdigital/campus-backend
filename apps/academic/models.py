@@ -29,9 +29,26 @@ class Program(BaseModel):
 
 class Level(BaseModel):
     """Level/Niveau model."""
+    # A Level always belongs to exactly one Program/filière (e.g. "Licence 3
+    # Marketing Management" vs "Licence 3 Droit" are two distinct Level rows)
+    # — cycle is a cross-filière grouping ("every L3, whichever filière") used
+    # by FeeConfiguration to configure one barème for a whole promotion year
+    # instead of one row per filière. Kept in sync with the duplicated
+    # CYCLE_CHOICES on finance.FeeConfiguration (see that model's comment).
+    CYCLE_CHOICES = [
+        ('L1', 'Licence 1'), ('L2', 'Licence 2'), ('L3', 'Licence 3'),
+        ('BTS1', 'BTS 1'), ('BTS2', 'BTS 2'),
+        ('DUT1', 'DUT 1'), ('DUT2', 'DUT 2'),
+        ('M1', 'Master 1'), ('M2', 'Master 2'),
+    ]
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=20)
     order = models.PositiveIntegerField(default=1)
+    cycle = models.CharField(
+        max_length=10, choices=CYCLE_CHOICES, null=True, blank=True,
+        verbose_name="Cycle",
+        help_text="Regroupement transversal (ex: Licence 3) utilisé pour configurer un barème valable pour toutes les filières de ce cycle."
+    )
     program = models.ForeignKey(
         Program,
         on_delete=models.CASCADE,
