@@ -147,6 +147,16 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         ]
 
 
+class SelfProfileUpdateSerializer(serializers.ModelSerializer):
+    """Used by MeView.patch — a user editing their own profile. Deliberately
+    excludes user_type/site/is_active (see UserUpdateSerializer), which are
+    admin-only fields and must never be self-editable."""
+
+    class Meta:
+        model = User
+        fields = ['first_name', 'last_name', 'phone', 'avatar']
+
+
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)
     new_password = serializers.CharField(required=True, min_length=8)

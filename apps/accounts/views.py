@@ -11,10 +11,11 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 
 from apps.core.models import AuditLog
 from .models import User, Role, Permission, UserRole, UserSite
+from .permissions import IsAdminOrStaff
 from .serializers import (
     CustomTokenObtainPairSerializer,
     UserSerializer, UserCreateSerializer, UserUpdateSerializer,
-    UserListSerializer, ChangePasswordSerializer,
+    UserListSerializer, ChangePasswordSerializer, SelfProfileUpdateSerializer,
     RoleSerializer, RoleListSerializer,
     PermissionSerializer, UserRoleSerializer, UserSiteSerializer,
     LoginSerializer
@@ -66,7 +67,10 @@ class MeView(APIView):
         return Response(serializer.data)
 
     def patch(self, request):
-        serializer = UserUpdateSerializer(request.user, data=request.data, partial=True)
+        # Deliberately NOT UserUpdateSerializer here — that one also exposes
+        # user_type/site/is_active, which would let any authenticated user
+        # self-promote to ADMIN via this exact endpoint.
+        serializer = SelfProfileUpdateSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(UserSerializer(request.user).data)
@@ -92,6 +96,7 @@ class ChangePasswordView(APIView):
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.select_related('site').all()
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrStaff]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['email', 'first_name', 'last_name', 'phone']
     ordering_fields = ['last_name', 'first_name', 'date_joined']
@@ -206,6 +211,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
 class RoleViewSet(viewsets.ModelViewSet):
     queryset = Role.objects.prefetch_related('permissions').all()
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrStaff]
     filter_backends = [DjangoFilterBackend, SearchFilter]
     search_fields = ['name', 'code']
     filterset_fields = ['is_active', 'is_system']
@@ -228,6 +234,7 @@ class RoleViewSet(viewsets.ModelViewSet):
 class PermissionViewSet(viewsets.ModelViewSet):
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrStaff]
     filter_backends = [DjangoFilterBackend, SearchFilter]
     search_fields = ['code', 'name']
     filterset_fields = ['module', 'is_active']
