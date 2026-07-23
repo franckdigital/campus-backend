@@ -170,13 +170,14 @@ class UserListSerializer(serializers.ModelSerializer):
 
 
 class LoginSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    # Accepts an email OR a phone number — EmailOrPhoneBackend resolves which one it is.
+    email = serializers.CharField()
     password = serializers.CharField()
 
     def validate(self, data):
         user = authenticate(email=data['email'], password=data['password'])
         if not user:
-            raise serializers.ValidationError('Email ou mot de passe incorrect')
+            raise serializers.ValidationError('Identifiant ou mot de passe incorrect')
         if not user.is_active:
             raise serializers.ValidationError('Ce compte est désactivé')
         data['user'] = user
