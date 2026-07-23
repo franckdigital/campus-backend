@@ -1339,10 +1339,17 @@ class VirtualClassroom(BaseModel):
     title    = models.CharField(max_length=255)
     provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES, default='JITSI')
 
-    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='virtual_classrooms')
-    subject   = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='virtual_classrooms')
+    # class_obj/subject are optional: a spontaneous session (is_spontaneous=True)
+    # isn't tied to one class/subject — it's open to everyone on a site instead.
+    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, null=True, blank=True, related_name='virtual_classrooms')
+    subject   = models.ForeignKey(Subject, on_delete=models.CASCADE, null=True, blank=True, related_name='virtual_classrooms')
     lesson    = models.ForeignKey(
         'Lesson', on_delete=models.SET_NULL, null=True, blank=True, related_name='virtual_classrooms'
+    )
+
+    is_spontaneous = models.BooleanField(default=False)
+    site = models.ForeignKey(
+        'core.Site', on_delete=models.SET_NULL, null=True, blank=True, related_name='virtual_classrooms'
     )
 
     start_time       = models.DateTimeField()

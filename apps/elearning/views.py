@@ -1811,13 +1811,28 @@ class VirtualClassroomViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = VirtualClassroom.objects.filter(is_active=True)
     serializer_class = VirtualClassroomSerializer
     filter_backends  = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['class_obj', 'subject', 'provider', 'is_ended']
+    filterset_fields = ['class_obj', 'subject', 'provider', 'is_ended', 'is_spontaneous', 'site']
     search_fields    = ['title']
     ordering_fields  = ['start_time', 'created_at']
 
+    def get_queryset(self):
+        qs = VirtualClassroom.objects.filter(is_active=True)
+        teacher = self._teacher_profile()
+        if teacher is None:
+            # Admin/staff/student/parent: unrestricted (existing behavior), and
+            # spontaneous sessions are open to everyone regardless of role.
+            return qs
+        pairs = teacher.class_subjects.filter(is_active=True).values_list('class_obj_id', 'subject_id')
+        scope = Q(is_spontaneous=True)
+        for class_id, subject_id in pairs:
+            scope |= Q(class_obj_id=class_id, subject_id=subject_id)
+        return qs.filter(scope)
+
     def perform_create(self, serializer):
         import uuid
-        self._check_teacher_scope(serializer)
+        is_spontaneous = serializer.validated_data.get('is_spontaneous', False)
+        if not is_spontaneous:
+            self._check_teacher_scope(serializer)
         data = serializer.validated_data
         provider = data.get('provider', 'JITSI')
         room_name = data.get('jitsi_room_name') or f"campus-{uuid.uuid4().hex[:8]}"
@@ -1825,10 +1840,14 @@ class VirtualClassroomViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         if provider == 'JITSI':
             extra['jitsi_room_name'] = room_name
             extra['join_url'] = f"https://meet.jit.si/{room_name}"
+        if is_spontaneous and not data.get('site') and getattr(self.request.user, 'site_id', None):
+            extra['site_id'] = self.request.user.site_id
         serializer.save(created_by=self.request.user, **extra)
 
     def perform_update(self, serializer):
-        self._check_teacher_scope(serializer)
+        is_spontaneous = serializer.validated_data.get('is_spontaneous', getattr(serializer.instance, 'is_spontaneous', False))
+        if not is_spontaneous:
+            self._check_teacher_scope(serializer)
         serializer.save()
 
     @action(detail=True, methods=['post'], url_path='end')
