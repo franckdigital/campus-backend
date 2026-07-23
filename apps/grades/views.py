@@ -402,6 +402,11 @@ class EvaluationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+        from apps.notifications.services import notify_evaluation_created
+        try:
+            notify_evaluation_created(serializer.instance)
+        except Exception:
+            pass
 
     @action(detail=True, methods=['post'])
     def lock(self, request, pk=None):

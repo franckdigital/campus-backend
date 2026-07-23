@@ -475,6 +475,118 @@ def notify_assignment_published(assignment):
         dispatch_notification(n)
 
 
+def _notify_enrolled_students(class_obj, notification_type, title, message, data, action_url=''):
+    """Shared fan-out for content scoped to one class (assignment/quiz/exam/
+    evaluation/non-spontaneous virtual class): every actively ENROLLED
+    student of that class gets the same notification."""
+    from apps.academic.models import Enrollment
+
+    enrollments = Enrollment.objects.filter(
+        class_obj=class_obj, is_active=True, status='ENROLLED'
+    ).select_related('student__user')
+
+    for enrollment in enrollments:
+        n = Notification.send(
+            recipient=enrollment.student.user,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+            data=data,
+            action_url=action_url,
+        )
+        dispatch_notification(n)
+
+
+def notify_course_published(course):
+    """Notify every active student of the course's site (Course has no
+    class_obj — it's a standalone/self-paced course, not tied to one class)."""
+    if not course.site_id:
+        return
+    from apps.students.models import Student
+
+    students = Student.objects.filter(site_id=course.site_id, is_active=True).select_related('user')
+    for student in students:
+        n = Notification.send(
+            recipient=student.user,
+            notification_type='COURSE',
+            title='Nouveau cours disponible',
+            message=f'Le cours "{course.title}" est maintenant disponible.',
+            data={'course_id': str(course.id)},
+            action_url=f'/courses/{course.id}',
+            site=course.site,
+        )
+        dispatch_notification(n)
+
+
+def notify_quiz_published(quiz):
+    """Notify students enrolled in the quiz's class."""
+    _notify_enrolled_students(
+        class_obj=quiz.class_obj,
+        notification_type='QUIZ',
+        title='Nouveau quiz',
+        message=f'Nouveau quiz "{quiz.title}"' + (f' en {quiz.subject.name}.' if quiz.subject_id else '.'),
+        data={'quiz_id': str(quiz.id)},
+        action_url=f'/quizzes/{quiz.id}',
+    )
+
+
+def notify_secure_exam_published(exam):
+    """Notify students enrolled in the exam's class."""
+    _notify_enrolled_students(
+        class_obj=exam.class_obj,
+        notification_type='EXAM',
+        title='Nouvel examen sécurisé',
+        message=f'Nouvel examen sécurisé "{exam.title}"' + (f' en {exam.subject.name}.' if exam.subject_id else '.'),
+        data={'exam_id': str(exam.id)},
+        action_url=f'/exams/{exam.id}',
+    )
+
+
+def notify_evaluation_created(evaluation):
+    """Notify students enrolled in the evaluation's class (apps.grades)."""
+    _notify_enrolled_students(
+        class_obj=evaluation.class_group,
+        notification_type='EVALUATION',
+        title='Nouvelle évaluation programmée',
+        message=(
+            f'{evaluation.get_eval_type_display()} "{evaluation.title}"'
+            + (f' en {evaluation.subject.name}' if evaluation.subject_id else '')
+            + f' prévu(e) le {evaluation.date.strftime("%d/%m/%Y")}.'
+        ),
+        data={'evaluation_id': str(evaluation.id)},
+    )
+
+
+def notify_virtual_classroom_created(classroom):
+    """Notify either the class's enrolled students, or — for a spontaneous
+    session open to everyone (see VirtualClassroom.is_spontaneous) — every
+    active student of the session's site."""
+    if classroom.class_obj_id:
+        _notify_enrolled_students(
+            class_obj=classroom.class_obj,
+            notification_type='VIRTUAL_CLASS',
+            title='Nouvelle classe virtuelle',
+            message=f'Nouvelle session "{classroom.title}" planifiée.',
+            data={'classroom_id': str(classroom.id)},
+            action_url=f'/virtual-classes/{classroom.id}',
+        )
+    elif classroom.is_spontaneous and classroom.site_id:
+        from apps.students.models import Student
+
+        students = Student.objects.filter(site_id=classroom.site_id, is_active=True).select_related('user')
+        for student in students:
+            n = Notification.send(
+                recipient=student.user,
+                notification_type='VIRTUAL_CLASS',
+                title='Classe virtuelle spontanée',
+                message=f'Une session en direct "{classroom.title}" vient de démarrer.',
+                data={'classroom_id': str(classroom.id)},
+                action_url=f'/virtual-classes/{classroom.id}',
+                site=classroom.site,
+            )
+            dispatch_notification(n)
+
+
 def notify_assignment_graded(correction):
     """Notify student and parents about graded assignment."""
     submission = correction.submission
