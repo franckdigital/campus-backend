@@ -194,6 +194,17 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             )
 
 
+def _retract_payment_notifications(payment_id):
+    """Removes any "Paiement confirmé" notifications tied to a payment that
+    was later edited away from SUCCESS or deleted (see PaymentViewSet
+    .perform_update / .perform_destroy). Without this, correcting a
+    duplicate/erroneous validated payment still leaves a false payment
+    confirmation permanently in the student's (and any notified parent's)
+    inbox, even after the invoice balance has been fixed back."""
+    from apps.notifications.models import Notification
+    Notification.objects.filter(data__payment_id=str(payment_id)).delete()
+
+
 class PaymentViewSet(viewsets.ModelViewSet):
     serializer_class = PaymentSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
@@ -239,12 +250,13 @@ class PaymentViewSet(viewsets.ModelViewSet):
         # Get the current payment from DB before any changes
         payment_id = self.get_object().pk
         old_payment = Payment.objects.get(pk=payment_id)
-        old_amount = Decimal(str(old_payment.amount)) if old_payment.status == 'SUCCESS' else Decimal('0')
-        
+        was_success = old_payment.status == 'SUCCESS'
+        old_amount = Decimal(str(old_payment.amount)) if was_success else Decimal('0')
+
         # Save the updated payment
         payment = serializer.save()
         new_amount = Decimal(str(payment.amount)) if payment.status == 'SUCCESS' else Decimal('0')
-        
+
         # Recalculate invoice totals based on difference
         if old_amount != new_amount:
             difference = new_amount - old_amount
@@ -257,11 +269,20 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 invoice.status = 'PARTIAL'
             invoice.save()
 
+        # A payment that stops being SUCCESS (edited back to PENDING/FAILED/
+        # CANCELLED) already had a "Paiement confirmé" notification sent to
+        # the student/parents when it was first validated — that claim is no
+        # longer true, so retract it instead of leaving a false confirmation
+        # sitting in their inbox.
+        if was_success and payment.status != 'SUCCESS':
+            _retract_payment_notifications(payment.id)
+
     def perform_destroy(self, instance):
         from decimal import Decimal
         invoice = instance.invoice
+        was_success = instance.status == 'SUCCESS'
         # If payment was SUCCESS, subtract from invoice totals
-        if instance.status == 'SUCCESS':
+        if was_success:
             invoice.amount_paid = max(Decimal('0'), Decimal(str(invoice.amount_paid)) - Decimal(str(instance.amount)))
             invoice.balance = Decimal(str(invoice.total)) - invoice.amount_paid
             if invoice.balance <= 0:
@@ -271,7 +292,13 @@ class PaymentViewSet(viewsets.ModelViewSet):
             else:
                 invoice.status = 'PENDING'
             invoice.save()
+        payment_id = instance.id
         instance.delete()
+        # See perform_update above — same false-confirmation problem, just
+        # via deletion (e.g. an admin removing a duplicate/erroneous entry)
+        # instead of an edit.
+        if was_success:
+            _retract_payment_notifications(payment_id)
 
     @action(detail=True, methods=['post'])
     def validate(self, request, pk=None):
