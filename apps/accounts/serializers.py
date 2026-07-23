@@ -138,7 +138,26 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
-class UserUpdateSerializer(serializers.ModelSerializer):
+class _UpdateFieldsOnlyMixin:
+    """Saves only the fields present in this request's payload (via
+    update_fields), instead of Django's default full-row save. Two requests
+    editing different fields on the same User concurrently (e.g. the admin
+    "Téléphone & mot de passe" modal firing a phone PATCH and a password
+    reset in parallel) would otherwise each write back a full snapshot of
+    every field taken at their own SELECT time — whichever commits last
+    silently reverts the other's change to its stale in-memory value. This
+    was reproduced in production: a phone number set together with a
+    password reset saved the password but left the phone blank."""
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if validated_data:
+            instance.save(update_fields=list(validated_data.keys()))
+        return instance
+
+
+class UserUpdateSerializer(_UpdateFieldsOnlyMixin, serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
@@ -147,7 +166,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         ]
 
 
-class SelfProfileUpdateSerializer(serializers.ModelSerializer):
+class SelfProfileUpdateSerializer(_UpdateFieldsOnlyMixin, serializers.ModelSerializer):
     """Used by MeView.patch — a user editing their own profile. Deliberately
     excludes user_type/site/is_active (see UserUpdateSerializer), which are
     admin-only fields and must never be self-editable."""

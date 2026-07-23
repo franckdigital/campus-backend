@@ -89,7 +89,7 @@ class ChangePasswordView(APIView):
             )
         
         user.set_password(serializer.validated_data['new_password'])
-        user.save()
+        user.save(update_fields=['password'])
         
         return Response({'detail': 'Mot de passe modifié avec succès'})
 
@@ -137,7 +137,7 @@ class UserViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         user.set_password(new_password)
-        user.save()
+        user.save(update_fields=['password'])
         return Response({'detail': 'Mot de passe réinitialisé avec succès.'})
 
     @action(detail=True, methods=['post'])
