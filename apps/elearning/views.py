@@ -542,6 +542,25 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             return QuizListSerializer
         return QuizSerializer
 
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        if serializer.instance.is_published:
+            from apps.notifications.services import notify_quiz_published
+            try:
+                notify_quiz_published(serializer.instance)
+            except Exception:
+                pass
+
+    def perform_update(self, serializer):
+        was_published = self.get_object().is_published
+        super().perform_update(serializer)
+        if not was_published and serializer.instance.is_published:
+            from apps.notifications.services import notify_quiz_published
+            try:
+                notify_quiz_published(serializer.instance)
+            except Exception:
+                pass
+
     def get_serializer_context(self):
         context = super().get_serializer_context()
         # Pre-fetch this student's attempts once for the whole list instead of
@@ -885,7 +904,14 @@ class AssignmentViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
         assignment = self.get_object()
+        was_published = assignment.status == 'PUBLISHED'
         assignment.publish()
+        if not was_published:
+            from apps.notifications.services import notify_assignment_published
+            try:
+                notify_assignment_published(assignment)
+            except Exception:
+                pass
         return Response(AssignmentSerializer(assignment).data)
 
     @action(detail=True, methods=['get'])
@@ -1138,8 +1164,15 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
         exam = self.get_object()
+        was_published = exam.is_published
         exam.is_published = True
         exam.save()
+        if not was_published:
+            from apps.notifications.services import notify_secure_exam_published
+            try:
+                notify_secure_exam_published(exam)
+            except Exception:
+                pass
         return Response(SecureExamSerializer(exam).data)
 
     @action(detail=True, methods=['post'], url_path='start-session')
@@ -1843,6 +1876,11 @@ class VirtualClassroomViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         if is_spontaneous and not data.get('site') and getattr(self.request.user, 'site_id', None):
             extra['site_id'] = self.request.user.site_id
         serializer.save(created_by=self.request.user, **extra)
+        from apps.notifications.services import notify_virtual_classroom_created
+        try:
+            notify_virtual_classroom_created(serializer.instance)
+        except Exception:
+            pass
 
     def perform_update(self, serializer):
         is_spontaneous = serializer.validated_data.get('is_spontaneous', getattr(serializer.instance, 'is_spontaneous', False))
@@ -2247,6 +2285,22 @@ class CourseViewSet(InstructorScopedCourseMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(instructor=self.request.user)
+        if serializer.instance.status == 'published':
+            from apps.notifications.services import notify_course_published
+            try:
+                notify_course_published(serializer.instance)
+            except Exception:
+                pass
+
+    def perform_update(self, serializer):
+        was_published = self.get_object().status == 'published'
+        serializer.save()
+        if not was_published and serializer.instance.status == 'published':
+            from apps.notifications.services import notify_course_published
+            try:
+                notify_course_published(serializer.instance)
+            except Exception:
+                pass
 
     def update(self, request, *args, **kwargs):
         kwargs['partial'] = True

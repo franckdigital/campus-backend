@@ -53,16 +53,21 @@ class NotificationTemplate(BaseModel):
 class Notification(BaseModel):
     """In-app notification record."""
     TYPE_CHOICES = [
-        ('PAYMENT',    'Paiement'),
-        ('ATTENDANCE', 'Présence'),
-        ('ABSENCE',    'Absence'),
-        ('ASSIGNMENT', 'Devoir'),
-        ('GRADE',      'Note'),
-        ('MESSAGE',    'Message'),
-        ('SYSTEM',     'Système'),
-        ('REMINDER',   'Rappel'),
-        ('ALERT',      'Alerte'),
-        ('FINANCE',    'Finance'),
+        ('PAYMENT',       'Paiement'),
+        ('ATTENDANCE',    'Présence'),
+        ('ABSENCE',       'Absence'),
+        ('ASSIGNMENT',    'Devoir'),
+        ('GRADE',         'Note'),
+        ('MESSAGE',       'Message'),
+        ('SYSTEM',        'Système'),
+        ('REMINDER',      'Rappel'),
+        ('ALERT',         'Alerte'),
+        ('FINANCE',       'Finance'),
+        ('COURSE',        'Cours'),
+        ('QUIZ',          'Quiz'),
+        ('EVALUATION',    'Évaluation'),
+        ('EXAM',          'Examen sécurisé'),
+        ('VIRTUAL_CLASS', 'Classe virtuelle'),
     ]
     PRIORITY_CHOICES = [
         ('LOW',    'Basse'),
