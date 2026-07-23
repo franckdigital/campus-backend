@@ -851,8 +851,9 @@ class ClassroomPollSerializer(serializers.ModelSerializer):
 
 
 class VirtualClassroomSerializer(serializers.ModelSerializer):
-    class_name   = serializers.CharField(source='class_obj.name', read_only=True)
-    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    class_name   = serializers.CharField(source='class_obj.name', read_only=True, default=None)
+    subject_name = serializers.CharField(source='subject.name', read_only=True, default=None)
+    site_name    = serializers.CharField(source='site.name', read_only=True, default=None)
     creator_name = serializers.SerializerMethodField()
     polls_count  = serializers.SerializerMethodField()
     jitsi_url    = serializers.SerializerMethodField()
@@ -861,6 +862,7 @@ class VirtualClassroomSerializer(serializers.ModelSerializer):
         model = VirtualClassroom
         fields = [
             'id', 'title', 'provider', 'class_obj', 'class_name', 'subject', 'subject_name', 'lesson',
+            'is_spontaneous', 'site', 'site_name',
             'start_time', 'duration_minutes',
             'join_url', 'host_url', 'meeting_id', 'password', 'jitsi_room_name', 'jitsi_url',
             'enable_recording', 'recording_url',
@@ -871,6 +873,20 @@ class VirtualClassroomSerializer(serializers.ModelSerializer):
             'is_active', 'created_at',
         ]
         read_only_fields = ['id', 'created_by', 'is_ended', 'ended_at', 'ai_summary', 'created_at']
+        extra_kwargs = {
+            'class_obj': {'required': False, 'allow_null': True},
+            'subject': {'required': False, 'allow_null': True},
+        }
+
+    def validate(self, data):
+        is_spontaneous = data.get('is_spontaneous', getattr(self.instance, 'is_spontaneous', False))
+        class_obj = data.get('class_obj', getattr(self.instance, 'class_obj', None))
+        subject = data.get('subject', getattr(self.instance, 'subject', None))
+        if not is_spontaneous and (not class_obj or not subject):
+            raise serializers.ValidationError(
+                "Classe et matière sont requises pour une session planifiée (non spontanée)."
+            )
+        return data
 
     def get_creator_name(self, obj):
         if obj.created_by:
