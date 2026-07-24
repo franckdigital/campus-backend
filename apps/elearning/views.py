@@ -1124,12 +1124,12 @@ class LibraryDocumentViewSet(viewsets.ModelViewSet):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
-    queryset = SecureExam.objects.select_related('class_obj', 'subject', 'quiz').all()
+    queryset = SecureExam.objects.select_related('class_obj', 'subject', 'quiz', 'site').all()
     serializer_class = SecureExamSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title', 'description']
     ordering_fields = ['start_date', 'created_at']
-    filterset_fields = ['class_obj', 'subject', 'exam_type', 'is_published', 'is_active']
+    filterset_fields = ['class_obj', 'subject', 'exam_type', 'is_published', 'is_active', 'is_global', 'site']
     # A student behind on their tuition échéancier can't start an exam session
     # (browsing/listing exams is unaffected — see apps.elearning.permissions).
     tuition_gate_actions = ('start_session',)
@@ -1146,8 +1146,25 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             class_ids = student.enrollments.filter(
                 status='ENROLLED', is_active=True
             ).values_list('class_obj_id', flat=True)
-            qs = qs.filter(class_obj_id__in=class_ids)
+            # A "simulation" exam (is_global=True) is visible to every student
+            # regardless of filière/classe — optionally still restricted to one
+            # site (site=None on the exam means every site).
+            scope = Q(class_obj_id__in=class_ids) | Q(is_global=True, site__isnull=True)
+            if student.site_id:
+                scope |= Q(is_global=True, site_id=student.site_id)
+            qs = qs.filter(scope)
         return qs
+
+    def perform_create(self, serializer):
+        if not serializer.validated_data.get('is_global', False):
+            self._check_teacher_scope(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        is_global = serializer.validated_data.get('is_global', getattr(serializer.instance, 'is_global', False))
+        if not is_global:
+            self._check_teacher_scope(serializer)
+        serializer.save()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

@@ -474,6 +474,7 @@ class ReadingProgressSerializer(serializers.ModelSerializer):
 class SecureExamSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source='class_obj.name', read_only=True, default=None)
     subject_name = serializers.CharField(source='subject.name', read_only=True, default=None)
+    site_name = serializers.CharField(source='site.name', read_only=True, default=None)
     is_available = serializers.SerializerMethodField()
     exam_type_label = serializers.CharField(source='get_exam_type_display', read_only=True)
     exam_pdf = serializers.SerializerMethodField()
@@ -492,6 +493,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'description',
             'class_obj', 'class_name', 'subject', 'subject_name',
+            'is_global', 'site', 'site_name',
             'quiz', 'exam_type', 'exam_type_label',
             'duration_minutes', 'start_date', 'end_date', 'max_attempts',
             'fullscreen_required', 'webcam_required', 'block_copy_paste',
@@ -506,6 +508,16 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'subject':   {'required': False, 'allow_null': True},
             'title':     {'required': False, 'allow_blank': True, 'default': ''},
         }
+
+    def validate(self, data):
+        is_global = data.get('is_global', getattr(self.instance, 'is_global', False))
+        class_obj = data.get('class_obj', getattr(self.instance, 'class_obj', None))
+        subject = data.get('subject', getattr(self.instance, 'subject', None))
+        if not is_global and (not class_obj or not subject):
+            raise serializers.ValidationError(
+                "Classe et matière sont requises pour un examen non ouvert à tous."
+            )
+        return data
 
     def get_is_available(self, obj):
         return obj.is_available()
