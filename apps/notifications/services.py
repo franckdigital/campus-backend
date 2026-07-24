@@ -531,7 +531,28 @@ def notify_quiz_published(quiz):
 
 
 def notify_secure_exam_published(exam):
-    """Notify students enrolled in the exam's class."""
+    """Notify students enrolled in the exam's class — or, for a "simulation"
+    exam open to everyone (see SecureExam.is_global), every active student
+    of the exam's site (or of every site, when the exam itself has none)."""
+    if exam.is_global:
+        from apps.students.models import Student
+
+        students = Student.objects.filter(is_active=True).select_related('user')
+        if exam.site_id:
+            students = students.filter(site_id=exam.site_id)
+        for student in students:
+            n = Notification.send(
+                recipient=student.user,
+                notification_type='EXAM',
+                title='Nouvel examen sécurisé (simulation)',
+                message=f'Nouvel examen sécurisé "{exam.title}" ouvert à tous.',
+                data={'exam_id': str(exam.id)},
+                action_url=f'/exams/{exam.id}',
+                site=exam.site,
+            )
+            dispatch_notification(n)
+        return
+
     _notify_enrolled_students(
         class_obj=exam.class_obj,
         notification_type='EXAM',

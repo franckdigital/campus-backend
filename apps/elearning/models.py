@@ -788,6 +788,12 @@ class SecureExam(BaseModel):
         Quiz, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exam'
     )
 
+    # A "simulation" exam open to every student regardless of filière/classe —
+    # class_obj/subject stay null in that case. site is optional even then:
+    # null means every site, a specific site restricts it to that site's students.
+    is_global = models.BooleanField(default=False)
+    site = models.ForeignKey('core.Site', on_delete=models.SET_NULL, null=True, blank=True, related_name='global_secure_exams')
+
     exam_type = models.CharField(max_length=20, choices=EXAM_TYPE_CHOICES, default='FINAL')
     duration_minutes = models.PositiveIntegerField(default=60)
     start_date = models.DateTimeField(null=True, blank=True)
@@ -816,7 +822,11 @@ class SecureExam(BaseModel):
         ordering = ['-start_date']
 
     def __str__(self):
-        return f"{self.class_obj.code} - {self.subject.code} - {self.title}"
+        if self.is_global:
+            return f"[Global] {self.title}"
+        class_label = self.class_obj.code if self.class_obj_id else '?'
+        subject_label = self.subject.code if self.subject_id else '?'
+        return f"{class_label} - {subject_label} - {self.title}"
 
     def is_available(self):
         from django.utils import timezone
