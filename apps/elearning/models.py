@@ -299,8 +299,10 @@ class Quiz(BaseModel):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
 
-    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='quizzes')
-    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='quizzes')
+    # Nullable so a quiz can back a "simulation" SecureExam (is_global=True),
+    # which isn't tied to one class/subject — see SecureExam.is_global.
+    class_obj = models.ForeignKey(Class, on_delete=models.SET_NULL, null=True, blank=True, related_name='quizzes')
+    subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True, related_name='quizzes')
     lesson = models.ForeignKey(
         Lesson, on_delete=models.SET_NULL, null=True, blank=True, related_name='quizzes'
     )

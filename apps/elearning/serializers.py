@@ -65,8 +65,8 @@ class QuestionSerializer(serializers.ModelSerializer):
 
 
 class QuizSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source='class_obj.name', read_only=True)
-    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    class_name = serializers.CharField(source='class_obj.name', read_only=True, default=None)
+    subject_name = serializers.CharField(source='subject.name', read_only=True, default=None)
     questions = QuestionSerializer(many=True, read_only=True)
     question_count = serializers.SerializerMethodField()
     max_score = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
@@ -81,6 +81,10 @@ class QuizSerializer(serializers.ModelSerializer):
             'attempts_used', 'is_active', 'created_at'
         ]
         read_only_fields = ['id', 'created_at']
+        extra_kwargs = {
+            'class_obj': {'required': False, 'allow_null': True},
+            'subject':   {'required': False, 'allow_null': True},
+        }
 
     def get_question_count(self, obj):
         return obj.questions.filter(is_active=True).count()
@@ -93,8 +97,8 @@ class QuizSerializer(serializers.ModelSerializer):
 
 
 class QuizListSerializer(serializers.ModelSerializer):
-    class_name = serializers.CharField(source='class_obj.name', read_only=True)
-    subject_name = serializers.CharField(source='subject.name', read_only=True)
+    class_name = serializers.CharField(source='class_obj.name', read_only=True, default=None)
+    subject_name = serializers.CharField(source='subject.name', read_only=True, default=None)
     question_count = serializers.SerializerMethodField()
     attempts_used = serializers.SerializerMethodField()
     best_score = serializers.SerializerMethodField()
@@ -106,6 +110,10 @@ class QuizListSerializer(serializers.ModelSerializer):
             'lesson', 'time_limit_minutes', 'max_attempts', 'pass_score_percent',
             'is_published', 'question_count', 'attempts_used', 'best_score'
         ]
+        extra_kwargs = {
+            'class_obj': {'required': False, 'allow_null': True},
+            'subject':   {'required': False, 'allow_null': True},
+        }
 
     def get_question_count(self, obj):
         # Iterate the prefetched cache (obj.questions.all()) instead of

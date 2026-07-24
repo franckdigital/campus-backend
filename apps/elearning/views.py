@@ -543,7 +543,12 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         return QuizSerializer
 
     def perform_create(self, serializer):
-        super().perform_create(serializer)
+        # A quiz backing a global "simulation" SecureExam (see SecureExam
+        # .is_global) has no class_obj — nothing to check a teacher's
+        # assignment against in that case.
+        if serializer.validated_data.get('class_obj'):
+            self._check_teacher_scope(serializer)
+        serializer.save()
         if serializer.instance.is_published:
             from apps.notifications.services import notify_quiz_published
             try:
@@ -553,7 +558,10 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         was_published = self.get_object().is_published
-        super().perform_update(serializer)
+        class_obj = serializer.validated_data.get('class_obj', getattr(serializer.instance, 'class_obj', None))
+        if class_obj:
+            self._check_teacher_scope(serializer)
+        serializer.save()
         if not was_published and serializer.instance.is_published:
             from apps.notifications.services import notify_quiz_published
             try:

@@ -519,7 +519,12 @@ def notify_course_published(course):
 
 
 def notify_quiz_published(quiz):
-    """Notify students enrolled in the quiz's class."""
+    """Notify students enrolled in the quiz's class. A quiz backing a global
+    SecureExam (see SecureExam.is_global) has no class_obj — that exam's own
+    publish action already notifies everyone via notify_secure_exam_published,
+    so there's nobody to enroll-scope here."""
+    if not quiz.class_obj_id:
+        return
     _notify_enrolled_students(
         class_obj=quiz.class_obj,
         notification_type='QUIZ',
