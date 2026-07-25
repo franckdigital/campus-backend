@@ -540,6 +540,18 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'list':
             return QuizListSerializer
+        if self.action == 'retrieve':
+            # ExamPage.jsx loads the exam's quiz via this exact endpoint
+            # (getQuizById -> GET .../quizzes/<id>/) before the student even
+            # starts answering — QuizSerializer's nested ChoiceSerializer
+            # includes is_correct unconditionally, which handed the full
+            # answer key to anyone checking the Network tab mid-exam, not
+            # just after submitting. Admins/staff/teachers still need the
+            # real serializer to actually edit questions.
+            user = self.request.user
+            is_staff_or_teacher = getattr(user, 'user_type', None) in ('ADMIN', 'STAFF') or hasattr(user, 'teacher_profile')
+            if not is_staff_or_teacher:
+                return QuizTakeSerializer
         return QuizSerializer
 
     def perform_create(self, serializer):
