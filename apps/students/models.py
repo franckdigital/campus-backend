@@ -123,6 +123,11 @@ class Student(BaseModel):
         default=False,
         help_text="Autorisation spéciale accordée par l'administration malgré un retard sur l'échéancier de scolarité"
     )
+    elearning_access = models.BooleanField(
+        default=True,
+        help_text="Active/désactive l'accès de l'étudiant aux ressources e-learning (cours, examens, évaluations) "
+                   "— indépendant du statut de paiement, contrôlé directement par l'administration."
+    )
 
     class Meta:
         db_table = 'students'

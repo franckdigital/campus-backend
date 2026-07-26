@@ -131,7 +131,7 @@ class StudentSerializer(serializers.ModelSerializer):
             'emergency_contact_phone', 'emergency_contact_relation',
             'medical_info', 'notes', 'photo', 'parents', 'current_card', 'current_class',
             'registration_fee', 'is_enrolled', 'tuition_fee',
-            'total_paid', 'remaining_balance', 'echeance_override',
+            'total_paid', 'remaining_balance', 'echeance_override', 'elearning_access',
             'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -271,7 +271,7 @@ class StudentListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'matricule', 'full_name', 'email', 'phone',
             'gender', 'site', 'site_name', 'status', 'modality', 'affectation_status', 'is_active',
-            'is_enrolled', 'echeance_override', 'program_name',
+            'is_enrolled', 'echeance_override', 'elearning_access', 'program_name',
             'tuition_up_to_date', 'has_payment_schedule',
         ]
 
@@ -321,7 +321,7 @@ class StudentDossierSerializer(serializers.ModelSerializer):
             'medical_info', 'notes', 'photo', 'parents', 'files', 'cards',
             'current_class',
             'is_enrolled', 'tuition_fee',
-            'total_paid', 'remaining_balance', 'echeance_override',
+            'total_paid', 'remaining_balance', 'echeance_override', 'elearning_access',
             'tuition_up_to_date', 'has_payment_schedule',
             'is_active', 'created_at', 'updated_at'
         ]

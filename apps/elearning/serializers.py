@@ -57,7 +57,7 @@ class QuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         fields = [
-            'id', 'quiz', 'question_type', 'text', 'image', 'order', 'points',
+            'id', 'quiz', 'question_type', 'text', 'question_prompt', 'image', 'order', 'points',
             'explanation', 'numeric_answer', 'numeric_tolerance', 'text_answer',
             'choices', 'is_active'
         ]
@@ -160,7 +160,7 @@ class QuestionTakeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Question
-        fields = ['id', 'question_type', 'text', 'image', 'order', 'points', 'choices']
+        fields = ['id', 'question_type', 'text', 'question_prompt', 'image', 'order', 'points', 'choices']
 
 
 class QuizTakeSerializer(serializers.ModelSerializer):
