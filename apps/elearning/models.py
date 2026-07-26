@@ -345,6 +345,11 @@ class Question(BaseModel):
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
     question_type = models.CharField(max_length=20, choices=QUESTION_TYPE_CHOICES, default='QCU')
     text = models.TextField()
+    # Distinct from `text` (the énoncé/mise en situation, e.g. a "cas pratique"
+    # with several paragraphs of context) — this is the actual question being
+    # asked, shown right below the énoncé to both the composer and the
+    # student. Optional: older/simple questions keep everything in `text`.
+    question_prompt = models.TextField(blank=True)
     image = models.ImageField(upload_to='quiz/questions/', blank=True, null=True)
     order = models.PositiveIntegerField(default=0)
     points = models.DecimalField(max_digits=6, decimal_places=2, default=1)
@@ -476,7 +481,14 @@ class AttemptAnswer(BaseModel):
             self.points_earned = points if self.is_correct else Decimal('0')
 
         elif q.question_type == 'TEXT':
-            if q.text_answer.strip():
+            # Secure-exam TEXT answers are always graded by the teacher, even
+            # when a "réponse modèle" is filled in — there it's only a
+            # correction aid (see ExamManager.jsx), never an auto-grading key,
+            # since an exact-match on a free-form written answer is
+            # meaningless for a real "cas pratique" response. Regular
+            # quizzes/devoirs keep the existing optional exact-match shortcut.
+            is_secure_exam = hasattr(q.quiz, 'secure_exam')
+            if not is_secure_exam and q.text_answer.strip():
                 self.is_correct = self.text_response.strip().lower() == q.text_answer.strip().lower()
                 self.points_earned = points if self.is_correct else Decimal('0')
             else:
