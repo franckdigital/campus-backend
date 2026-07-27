@@ -798,6 +798,16 @@ class SecureExam(BaseModel):
 
     class_obj = models.ForeignKey(Class, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exams')
     subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exams')
+    # Explicit admin-assignable link, separate from the class_obj+subject
+    # timetable match (ClassSubjectTeacher) that TeacherScopedContentMixin
+    # otherwise relies on — lets an admin attach a specific teacher to this
+    # exam so it shows up in that teacher's own space even when no (or a
+    # different) ClassSubjectTeacher assignment exists for the chosen
+    # class/subject. Auto-filled when a teacher creates their own exam (see
+    # SecureExamViewSet.perform_create).
+    teacher = models.ForeignKey(
+        TeacherProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exams'
+    )
     quiz = models.OneToOneField(
         Quiz, on_delete=models.SET_NULL, null=True, blank=True, related_name='secure_exam'
     )

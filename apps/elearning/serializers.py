@@ -483,6 +483,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source='class_obj.name', read_only=True, default=None)
     subject_name = serializers.CharField(source='subject.name', read_only=True, default=None)
     site_name = serializers.CharField(source='site.name', read_only=True, default=None)
+    teacher_name = serializers.CharField(source='teacher.user.full_name', read_only=True, default=None)
     is_available = serializers.SerializerMethodField()
     exam_type_label = serializers.CharField(source='get_exam_type_display', read_only=True)
     exam_pdf = serializers.SerializerMethodField()
@@ -501,6 +502,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'description',
             'class_obj', 'class_name', 'subject', 'subject_name',
+            'teacher', 'teacher_name',
             'is_global', 'site', 'site_name',
             'quiz', 'exam_type', 'exam_type_label',
             'duration_minutes', 'start_date', 'end_date', 'max_attempts',
@@ -514,6 +516,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'class_obj': {'required': False, 'allow_null': True},
             'subject':   {'required': False, 'allow_null': True},
+            'teacher':   {'required': False, 'allow_null': True},
             'title':     {'required': False, 'allow_blank': True, 'default': ''},
         }
 

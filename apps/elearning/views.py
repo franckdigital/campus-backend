@@ -1176,15 +1176,29 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        # _check_teacher_scope also returns the requesting teacher's own
+        # profile (None for admin/staff) — reuse it to auto-link the exam to
+        # its authoring teacher, same as Lesson/Assignment already do via
+        # TeacherScopedContentMixin.perform_create. An admin's explicit
+        # `teacher` choice from the form is left untouched either way.
+        teacher = None
         if not serializer.validated_data.get('is_global', False):
-            self._check_teacher_scope(serializer)
-        serializer.save()
+            teacher = self._check_teacher_scope(serializer)
+        if teacher is not None and not serializer.validated_data.get('teacher'):
+            serializer.save(teacher=teacher)
+        else:
+            serializer.save()
 
     def perform_update(self, serializer):
         is_global = serializer.validated_data.get('is_global', getattr(serializer.instance, 'is_global', False))
+        teacher = None
         if not is_global:
-            self._check_teacher_scope(serializer)
-        serializer.save()
+            teacher = self._check_teacher_scope(serializer)
+        if (teacher is not None and not serializer.validated_data.get('teacher')
+                and not serializer.instance.teacher_id):
+            serializer.save(teacher=teacher)
+        else:
+            serializer.save()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
