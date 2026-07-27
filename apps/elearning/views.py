@@ -727,7 +727,7 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         import json as _json
         quiz = self.get_object()
         topic   = request.data.get('topic', quiz.title)
-        count   = min(int(request.data.get('count', 5)), 20)
+        count   = min(int(request.data.get('count', 5)), 50)
         q_type  = request.data.get('question_type', 'QCU')
         level   = request.data.get('level', 'moyen')
 
