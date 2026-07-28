@@ -744,7 +744,19 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             "content": f"Génère {count} questions de type {q_type} niveau {level} sur le sujet: {topic}. Matière: {quiz.subject_name if hasattr(quiz, 'subject_name') else ''}. Langue: français."
         }]
 
-        raw, tokens = _call_claude(system, messages, max_tokens=3000)
+        # A flat 3000-token budget was fine back when count was capped at 20,
+        # but raising the cap to 50 without raising this left barely ~60
+        # tokens/question once JSON syntax, the explanation and 4 choices are
+        # accounted for — nowhere near enough for French text with
+        # diacritics. Under that pressure Claude doesn't fail outright, it
+        # degrades: later questions in the batch come back with genuinely
+        # repeated/duplicated choice text (still valid JSON, so nothing here
+        # ever caught it), which is exactly what showed up as "duplicate
+        # answers" on an exam generated with a high count. Scaled with count,
+        # floored at the original 3000 for small batches, capped well within
+        # what the model supports.
+        ai_max_tokens = max(3000, min(300 * count, 8192))
+        raw, tokens = _call_claude(system, messages, max_tokens=ai_max_tokens)
 
         # Extract JSON array from response
         try:
@@ -772,14 +784,27 @@ class QuizViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             ser = QS(data=q_data)
             if ser.is_valid():
                 question = ser.save()
-                # Create choices
+                # Create choices — de-duplicated by normalized text and
+                # capped to 4 (per the prompt's own "4 choix" instruction).
+                # Belt-and-suspenders alongside the widened token budget
+                # above: even a well-budgeted response can still repeat a
+                # choice verbatim, and without this a duplicated entry here
+                # showed the candidate the same answer option twice.
+                seen_texts = set()
+                order = 0
                 for c in item.get('choices', []):
+                    text = (c.get('text') or '').strip()
+                    key = text.lower()
+                    if not text or key in seen_texts or order >= 4:
+                        continue
+                    seen_texts.add(key)
                     Choice.objects.create(
                         question=question,
-                        text=c.get('text', ''),
+                        text=text,
                         is_correct=c.get('is_correct', False),
-                        order=0
+                        order=order,
                     )
+                    order += 1
                 created_questions.append(question)
 
         return Response({
