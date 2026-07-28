@@ -965,28 +965,25 @@ class ExamSession(BaseModel):
             elif tag not in self.flag_reason:
                 self.flag_reason = f"{self.flag_reason} · {tag}"
         elif event_type == 'FRAUD_BLOCK':
-            # Unlike a single AI_FLAG reading, this only fires client-side
-            # after a suspicious signal is *sustained* across several
-            # consecutive detection ticks (see ExamPage.jsx) — the frontend
-            # has already suspended the student behind a blocking modal by
-            # the time this is logged. First offense (count reaches 1) is a
-            # timed suspension the student resumes from on their own; a
-            # second one is a repeat offense the frontend ends the exam over
-            # — this method just keeps the authoritative count so a page
-            # refresh mid-block can't be used to reset it back to zero.
+            # Fires client-side for the only two things left that suspend an
+            # exam — a tab/window switch or a copy/paste attempt (see
+            # ExamPage.jsx's useAntiCheat) — the frontend has already
+            # suspended the student behind a flat, fixed-duration blocking
+            # modal by the time this is logged. Never escalates and never
+            # closes the session on its own: this just keeps a count/flag for
+            # the teacher's own review, left entirely to their judgment.
             self.fraud_block_count += 1
             self.is_flagged = True
-            tag = f"Fraude webcam (blocage n°{self.fraud_block_count}): {details or 'Comportement suspect prolongé'}"
+            tag = f"Suspension anti-triche (n°{self.fraud_block_count}): {details or 'Comportement suspect'}"
             if not self.flag_reason:
                 self.flag_reason = tag
             elif tag not in self.flag_reason:
                 self.flag_reason = f"{self.flag_reason} · {tag}"
 
-        # Tab switches and fullscreen exits are both "left the secured exam
-        # environment" events, and the frontend's client-side lock treats
-        # them as contributing to the same limit — mirror that here so the
-        # session actually gets flagged/closed server-side to match, instead
-        # of only the fullscreen-exit counter silently incrementing forever.
+        # Tab switches and fullscreen exits past max_tab_switches are flagged
+        # for the teacher's own review — but never auto-close the session
+        # anymore; that's left entirely to the teacher's judgment, not an
+        # automatic consequence.
         max_sw = self.exam.max_tab_switches
         if max_sw and (self.tab_switch_count > max_sw or self.fullscreen_exit_count > max_sw):
             self.is_flagged = True
@@ -996,11 +993,6 @@ class ExamSession(BaseModel):
             if self.fullscreen_exit_count > max_sw:
                 reasons.append(f"sorties du plein écran ({self.fullscreen_exit_count}/{max_sw})")
             self.flag_reason = "Trop de " + " et de ".join(reasons)
-            # Actually close the session — being flagged shouldn't leave it stuck
-            # in STARTED, which would let the student keep answering or retake it.
-            if self.status == 'STARTED':
-                self.status = 'FLAGGED'
-                self.submitted_at = self.submitted_at or timezone.now()
         self.save()
 
     def check_webcam_integrity(self):
