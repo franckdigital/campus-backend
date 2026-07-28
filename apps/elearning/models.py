@@ -964,6 +964,20 @@ class ExamSession(BaseModel):
                 self.flag_reason = tag
             elif tag not in self.flag_reason:
                 self.flag_reason = f"{self.flag_reason} · {tag}"
+        elif event_type == 'WEBCAM_BLANK':
+            # The stream itself never dropped (WEBCAM_LOST didn't fire) but the
+            # frontend's own frame sampling found several consecutive
+            # uniformly-black captures — a covered lens, closed privacy
+            # shutter, or the camera silently sharing frames with another app
+            # can all report a perfectly "active" stream while delivering
+            # nothing usable. Flag for review same as WEBCAM_LOST rather than
+            # letting blank evidence go unnoticed until correction.
+            self.is_flagged = True
+            tag = f"Webcam: {details or 'Image caméra noire/obstruée'}"
+            if not self.flag_reason:
+                self.flag_reason = tag
+            elif tag not in self.flag_reason:
+                self.flag_reason = f"{self.flag_reason} · {tag}"
         elif event_type == 'FRAUD_BLOCK':
             # Fires client-side for the only two things left that suspend an
             # exam — a tab/window switch or a copy/paste attempt (see
