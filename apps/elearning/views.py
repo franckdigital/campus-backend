@@ -1511,6 +1511,38 @@ class ExamSessionGradeView(APIView):
         return Response(ExamSessionSerializer(session).data)
 
 
+class ExamSessionDeleteView(APIView):
+    """DELETE /elearning/exam-sessions/<session_id>/ — Admin/prof supprime la
+    soumission d'un étudiant (correction hub) — copie de test, doublon, ou
+    erreur à effacer pour permettre une nouvelle tentative. Supprime aussi la
+    tentative de quiz liée : elle compte dans le quota max_attempts de
+    l'étudiant, donc la laisser derrière bloquerait quand même une reprise
+    malgré la session elle-même supprimée.
+    """
+
+    def delete(self, request, session_id):
+        try:
+            session = ExamSession.objects.select_related('exam', 'quiz_attempt').get(id=session_id)
+        except ExamSession.DoesNotExist:
+            return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user
+        if getattr(user, 'user_type', None) not in ('ADMIN', 'STAFF'):
+            teacher = getattr(user, 'teacher_profile', None)
+            exam = session.exam
+            owns = teacher and teacher.class_subjects.filter(
+                class_obj=exam.class_obj, subject=exam.subject, is_active=True
+            ).exists()
+            if not owns:
+                raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
+
+        attempt = session.quiz_attempt
+        session.delete()
+        if attempt:
+            attempt.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ExamSessionSubmitFileView(APIView):
     """POST /elearning/exam-sessions/<session_id>/submit-file/ — Étudiant soumet sa
     copie pour la partie PDF d'un examen (fichier et/ou réponse texte rédigée
