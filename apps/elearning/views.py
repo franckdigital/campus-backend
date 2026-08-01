@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.db.models import Q, Count, Avg
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -1168,6 +1171,13 @@ class LibraryDocumentViewSet(viewsets.ModelViewSet):
 # LOT 12 — Examens sécurisés
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Un device_token différent de celui enregistré sur la session n'est refusé
+# que tant que le détenteur actuel a donné signe de vie il y a moins de ça
+# (voir SecureExamViewSet.start_session / .heartbeat) — au-delà, le verrou
+# est considéré abandonné (onglet fermé, app tuée, crash) et peut être repris.
+DEVICE_LOCK_STALE_SECONDS = 60
+
+
 class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = SecureExam.objects.select_related('class_obj', 'subject', 'quiz', 'site').all()
     serializer_class = SecureExamSerializer
@@ -1269,10 +1279,22 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         if existing and existing.status in ('SUBMITTED', 'FLAGGED'):
             return Response({'detail': 'Vous avez déjà soumis cet examen'}, status=status.HTTP_400_BAD_REQUEST)
 
+        device_token = request.data.get('device_token') or ''
+        now = timezone.now()
+        if (existing and existing.device_token and existing.device_token != device_token
+                and existing.last_seen_at and now - existing.last_seen_at < timedelta(seconds=DEVICE_LOCK_STALE_SECONDS)):
+            return Response(
+                {'detail': 'Cet examen est déjà ouvert sur un autre appareil.', 'code': 'DEVICE_LOCKED'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         session, created = ExamSession.objects.get_or_create(
             exam=exam, student=student,
             defaults={'status': 'STARTED', 'time_remaining_seconds': exam.duration_minutes * 60}
         )
+        session.device_token = device_token
+        session.last_seen_at = now
+        session.save(update_fields=['device_token', 'last_seen_at'])
 
         if created and exam.quiz:
             # The student's frontend flow calls quiz start-attempt (which resumes
@@ -1318,6 +1340,34 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             'is_flagged': session.is_flagged,
             'fraud_block_count': session.fraud_block_count,
         })
+
+    @action(detail=True, methods=['post'], url_path='heartbeat')
+    def heartbeat(self, request, pk=None):
+        """Anti-multi-device : signal de vie périodique du client qui détient
+        actuellement la session. Rejette (409) si un autre appareil a repris
+        la main entre-temps — voir DEVICE_LOCK_STALE_SECONDS."""
+        exam = self.get_object()
+        student = getattr(request.user, 'student_profile', None)
+        if not student:
+            return Response({'detail': 'Profil étudiant requis'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            session = ExamSession.objects.get(exam=exam, student=student)
+        except ExamSession.DoesNotExist:
+            return Response({'detail': 'Session non trouvée'}, status=status.HTTP_404_NOT_FOUND)
+
+        device_token = request.data.get('device_token') or ''
+        now = timezone.now()
+        if (session.device_token and session.device_token != device_token
+                and session.last_seen_at and now - session.last_seen_at < timedelta(seconds=DEVICE_LOCK_STALE_SECONDS)):
+            return Response(
+                {'detail': 'Cet examen est désormais ouvert sur un autre appareil.', 'code': 'DEVICE_LOCKED'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        session.device_token = device_token
+        session.last_seen_at = now
+        session.save(update_fields=['device_token', 'last_seen_at'])
+        return Response({'status': 'ok'})
 
     @action(detail=True, methods=['get'], url_path='sessions')
     def sessions(self, request, pk=None):
