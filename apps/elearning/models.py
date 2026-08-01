@@ -890,6 +890,15 @@ class ExamSession(BaseModel):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='STARTED')
     time_remaining_seconds = models.PositiveIntegerField(null=True, blank=True)
 
+    # Verrou "un seul appareil à la fois" : identifie le dernier onglet/app
+    # ayant démarré ou renvoyé un heartbeat pour cette session. Un autre
+    # device_token n'est accepté que si celui-ci n'a plus donné signe de vie
+    # depuis DEVICE_LOCK_STALE_SECONDS (voir SecureExamViewSet.start_session
+    # et .heartbeat) — évite qu'un même étudiant fasse l'examen simultanément
+    # sur deux appareils, sans bloquer définitivement en cas de crash/fermeture.
+    device_token = models.CharField(max_length=64, blank=True, default='')
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
     # Anti-triche counters
     tab_switch_count = models.PositiveIntegerField(default=0)
     fullscreen_exit_count = models.PositiveIntegerField(default=0)
