@@ -818,6 +818,15 @@ class SecureExam(BaseModel):
     is_global = models.BooleanField(default=False)
     site = models.ForeignKey('core.Site', on_delete=models.SET_NULL, null=True, blank=True, related_name='global_secure_exams')
 
+    # Individually added students, on top of whoever the class_obj (or
+    # is_global) scoping already grants access to — never a restriction,
+    # only ever an extra allowlist (a retake, a student from another class,
+    # a makeup exam...). Leaving this empty changes nothing about who can
+    # see an exam; existing exams are unaffected.
+    students = models.ManyToManyField(
+        'students.Student', blank=True, related_name='targeted_secure_exams'
+    )
+
     exam_type = models.CharField(max_length=20, choices=EXAM_TYPE_CHOICES, default='FINAL')
     duration_minutes = models.PositiveIntegerField(default=60)
     start_date = models.DateTimeField(null=True, blank=True)

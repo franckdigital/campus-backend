@@ -488,6 +488,16 @@ class SecureExamSerializer(serializers.ModelSerializer):
     exam_type_label = serializers.CharField(source='get_exam_type_display', read_only=True)
     exam_pdf = serializers.SerializerMethodField()
     my_session = serializers.SerializerMethodField()
+    # `students` (writable, list of ids) lets the admin builder submit which
+    # students to add; students_detail (read-only) gives back name/matricule
+    # so the picker can show who's already assigned when editing an exam.
+    students_detail = serializers.SerializerMethodField()
+
+    def get_students_detail(self, obj):
+        return [
+            {'id': str(s.id), 'name': s.user.full_name, 'matricule': s.matricule}
+            for s in obj.students.select_related('user').all()
+        ]
 
     def to_internal_value(self, data):
         # When frontend sends subject_file as a string URL (existing file), strip it.
@@ -504,6 +514,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'class_obj', 'class_name', 'subject', 'subject_name',
             'teacher', 'teacher_name',
             'is_global', 'site', 'site_name',
+            'students', 'students_detail',
             'quiz', 'exam_type', 'exam_type_label',
             'duration_minutes', 'start_date', 'end_date', 'max_attempts',
             'fullscreen_required', 'webcam_required', 'block_copy_paste',

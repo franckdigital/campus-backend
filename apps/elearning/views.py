@@ -1197,7 +1197,11 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             scope = Q(class_obj_id__in=class_ids) | Q(is_global=True, site__isnull=True)
             if student.site_id:
                 scope |= Q(is_global=True, site_id=student.site_id)
-            qs = qs.filter(scope)
+            # Individually-added students (see SecureExam.students) always see
+            # the exam too, regardless of class enrollment — a retake, a
+            # student from another class, a makeup exam.
+            scope |= Q(students=student)
+            qs = qs.filter(scope).distinct()
         return qs
 
     def perform_create(self, serializer):
