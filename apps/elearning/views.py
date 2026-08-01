@@ -1204,12 +1204,18 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             # A "simulation" exam (is_global=True) is visible to every student
             # regardless of filière/classe — optionally still restricted to one
             # site (site=None on the exam means every site).
-            scope = Q(class_obj_id__in=class_ids) | Q(is_global=True, site__isnull=True)
+            class_or_global = Q(class_obj_id__in=class_ids) | Q(is_global=True, site__isnull=True)
             if student.site_id:
-                scope |= Q(is_global=True, site_id=student.site_id)
+                class_or_global |= Q(is_global=True, site_id=student.site_id)
+            # restrict_to_selected_students turns `students` from an addition
+            # on top of the class/global scope into the ONLY way in — so the
+            # class/global branch is gated off entirely for those exams, and
+            # explicit assignment (below) is the sole path to visibility.
+            scope = Q(restrict_to_selected_students=False) & class_or_global
             # Individually-added students (see SecureExam.students) always see
             # the exam too, regardless of class enrollment — a retake, a
-            # student from another class, a makeup exam.
+            # student from another class, a makeup exam, or (when
+            # restrict_to_selected_students is set) the entire audience.
             scope |= Q(students=student)
             qs = qs.filter(scope).distinct()
         return qs

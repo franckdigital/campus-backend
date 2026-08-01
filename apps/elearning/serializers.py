@@ -514,7 +514,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'class_obj', 'class_name', 'subject', 'subject_name',
             'teacher', 'teacher_name',
             'is_global', 'site', 'site_name',
-            'students', 'students_detail',
+            'students', 'students_detail', 'restrict_to_selected_students',
             'quiz', 'exam_type', 'exam_type_label',
             'duration_minutes', 'start_date', 'end_date', 'max_attempts',
             'fullscreen_required', 'webcam_required', 'block_copy_paste',

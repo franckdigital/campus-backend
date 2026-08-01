@@ -821,11 +821,18 @@ class SecureExam(BaseModel):
     # Individually added students, on top of whoever the class_obj (or
     # is_global) scoping already grants access to — never a restriction,
     # only ever an extra allowlist (a retake, a student from another class,
-    # a makeup exam...). Leaving this empty changes nothing about who can
-    # see an exam; existing exams are unaffected.
+    # a makeup exam...), UNLESS restrict_to_selected_students is set (see
+    # below). Leaving this empty changes nothing about who can see an exam;
+    # existing exams are unaffected.
     students = models.ManyToManyField(
         'students.Student', blank=True, related_name='targeted_secure_exams'
     )
+    # When true, `students` stops being an addition on top of class_obj/
+    # is_global and becomes the ONLY way in — the exam is visible solely to
+    # the students explicitly listed there, regardless of their class.
+    # class_obj/subject are still kept (for the teacher's own scoping and
+    # for reporting) but no longer grant visibility to the rest of the class.
+    restrict_to_selected_students = models.BooleanField(default=False)
 
     exam_type = models.CharField(max_length=20, choices=EXAM_TYPE_CHOICES, default='FINAL')
     duration_minutes = models.PositiveIntegerField(default=60)
