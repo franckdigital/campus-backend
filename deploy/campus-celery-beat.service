@@ -1,7 +1,15 @@
 [Unit]
 Description=Campus Backend — Celery Beat Scheduler
-After=network.target redis.service
+After=network.target redis.service mysql.service
 Requires=redis.service
+# Without this, systemd's default rate limit (5 restarts within 10s) is
+# quickly exhausted by Restart=always/RestartSec=5 below whenever MySQL
+# isn't up yet at boot — the service then stays dead until someone notices
+# and restarts it by hand (see the July 31 échéancier-reminder outage:
+# beat crashed on "Can't connect to local MySQL server", burned through
+# its restart budget in under 30s, and sat dead for 3 days). 0 = no limit,
+# so it just keeps retrying every RestartSec until MySQL answers.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

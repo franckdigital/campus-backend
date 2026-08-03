@@ -1,7 +1,10 @@
 [Unit]
 Description=Escam Backend — Celery Worker
-After=network.target redis.service
+After=network.target redis.service mysql.service
 Requires=redis.service
+# See escam-celery-beat.service for why this matters — same crash-then-
+# permanently-dead failure mode if MySQL isn't up yet when this starts.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
