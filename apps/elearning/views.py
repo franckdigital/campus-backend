@@ -920,13 +920,19 @@ class QuizAttemptViewSet(TeacherScopedByRelatedMixin, viewsets.ReadOnlyModelView
             answer.grade()
 
         attempt.finalize()
+        # Closes the linked secure-exam session (if any) right after
+        # finalize() commits, not after the lesson-progress block below — an
+        # exception in THAT (unrelated to secure exams, only relevant for
+        # regular lesson quizzes) must never leave a secure exam's session
+        # stuck at STARTED with its attempt already finalized, which would
+        # silently let start-session treat it as resumable (see the
+        # quiz_attempt.submitted_at fallback check there too).
+        self._sync_exam_session(attempt)
 
         if attempt.quiz.lesson_id:
             progress = LessonProgress.objects.filter(student=student, lesson_id=attempt.quiz.lesson_id).first()
             if progress:
                 progress.evaluate_completion()
-
-        self._sync_exam_session(attempt)
 
         # Re-fetch from DB so serializer gets fresh graded answers (not stale prefetch)
         fresh = QuizAttempt.objects.prefetch_related(
@@ -1281,8 +1287,20 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         if not exam.is_available():
             return Response({'detail': 'Cet examen n\'est pas disponible'}, status=status.HTTP_403_FORBIDDEN)
 
-        existing = ExamSession.objects.filter(exam=exam, student=student).first()
-        if existing and existing.status in ('SUBMITTED', 'FLAGGED'):
+        existing = ExamSession.objects.select_related('quiz_attempt').filter(exam=exam, student=student).first()
+        # The second condition is a defense-in-depth fallback, not redundant:
+        # existing.status is only flipped to SUBMITTED by _sync_exam_session
+        # (QuizAttemptViewSet.submit) — if anything ever throws between the
+        # quiz attempt finalizing and that sync running, the attempt itself
+        # is still correctly closed (submitted_at set) even though the
+        # session's own status got left at STARTED, which used to let the
+        # student start a brand new attempt on an exam they'd already
+        # finished.
+        already_submitted = existing and (
+            existing.status in ('SUBMITTED', 'FLAGGED')
+            or (existing.quiz_attempt_id and existing.quiz_attempt.submitted_at)
+        )
+        if already_submitted:
             return Response({'detail': 'Vous avez déjà soumis cet examen'}, status=status.HTTP_400_BAD_REQUEST)
 
         device_token = request.data.get('device_token') or ''
