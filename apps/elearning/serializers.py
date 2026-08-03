@@ -519,7 +519,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'duration_minutes', 'start_date', 'end_date', 'max_attempts',
             'fullscreen_required', 'webcam_required', 'block_copy_paste',
             'max_tab_switches', 'require_student_photo', 'ai_proctoring',
-            'break_duration_minutes',
+            'break_duration_minutes', 'break_interval_minutes',
             'is_published', 'pass_score_percent', 'coefficient',
             'max_score', 'subject_file', 'exam_pdf', 'pdf_extra_duration',
             'is_available', 'my_session', 'is_active', 'created_at',

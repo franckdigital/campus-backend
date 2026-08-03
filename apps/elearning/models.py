@@ -847,11 +847,14 @@ class SecureExam(BaseModel):
     max_tab_switches = models.PositiveIntegerField(default=1)
     require_student_photo = models.BooleanField(default=False)
     ai_proctoring = models.BooleanField(default=False)
-    # Durée (en minutes) de chaque pause "toilettes" obligatoire-mais-évitable
-    # accordée tous les 30 min de composition effective (fréquence fixe, non
-    # paramétrable) — voir ExamPage.jsx (frontend campus-react/escam-react),
-    # seule plateforme implémentant les pauses (pas de pause côté mobile).
+    # Durée (en minutes) de chaque pause "toilettes" obligatoire-mais-évitable,
+    # et fréquence (tous les combien de minutes de composition effective elle
+    # est accordée) — les deux réglables par examen, notamment pour pouvoir
+    # démontrer/tester le déroulé d'une pause sur un examen de démo très
+    # court sans attendre 30 min. Voir ExamPage.jsx (frontend campus-react/
+    # escam-react), seule plateforme implémentant les pauses (pas côté mobile).
     break_duration_minutes = models.PositiveIntegerField(default=3)
+    break_interval_minutes = models.PositiveIntegerField(default=30)
 
     is_published = models.BooleanField(default=False)
     pass_score_percent = models.PositiveSmallIntegerField(default=50)
