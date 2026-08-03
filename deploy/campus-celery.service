@@ -1,7 +1,7 @@
 [Unit]
 Description=Campus Backend — Celery Worker
-After=network.target redis.service mysql.service
-Requires=redis.service
+After=network.target redis-server.service mysql.service
+Requires=redis-server.service
 # See campus-celery-beat.service for why this matters — same crash-then-
 # permanently-dead failure mode if MySQL isn't up yet when this starts.
 StartLimitIntervalSec=0
