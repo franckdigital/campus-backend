@@ -1381,6 +1381,22 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         qs = ExamSession.objects.filter(exam=exam).select_related('student__user', 'quiz_attempt')
         return Response(ExamSessionSerializer(qs, many=True, context={'request': request}).data)
 
+    @staticmethod
+    def _rank_sessions(exam):
+        """Graded (SUBMITTED/FLAGGED, scored) sessions for one exam, sorted
+        best-first — the shared core of both `ranking` (student-facing, one
+        exam) and `ranking_overview` (teacher/admin, many exams at once)."""
+        sessions = ExamSession.objects.filter(
+            exam=exam, status__in=['SUBMITTED', 'FLAGGED']
+        ).select_related('student__user', 'quiz_attempt')
+        graded = []
+        for s in sessions:
+            percent = s.resolve_percent()
+            if percent is not None:
+                graded.append((s, percent))
+        graded.sort(key=lambda pair: -pair[1])
+        return graded
+
     @action(detail=True, methods=['get'], url_path='ranking')
     def ranking(self, request, pk=None):
         """Student-facing leaderboard — rank + mention only (Excellent/Très
@@ -1391,27 +1407,62 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         """
         exam = self.get_object()
         student = getattr(request.user, 'student_profile', None)
-        sessions = ExamSession.objects.filter(
-            exam=exam, status__in=['SUBMITTED', 'FLAGGED']
-        ).select_related('student__user', 'quiz_attempt')
-
-        graded = []
-        for s in sessions:
-            percent = s.resolve_percent()
-            if percent is not None:
-                graded.append((s, percent))
-        graded.sort(key=lambda pair: -pair[1])
+        graded = self._rank_sessions(exam)
 
         result = [
             {
                 'rank': rank,
                 'is_me': bool(student) and s.student_id == student.id,
                 'full_name': s.student.user.full_name or s.student.matricule,
+                'last_name': s.student.user.last_name,
+                'first_name': s.student.user.first_name,
+                'matricule': s.student.matricule,
                 'mention': mention_for_percent(percent),
             }
             for rank, (s, percent) in enumerate(graded, 1)
         ]
         return Response({'results': result, 'total_graded': len(result)})
+
+    @action(detail=False, methods=['get'], url_path='ranking-overview')
+    def ranking_overview(self, request):
+        """Teacher/admin cross-exam classement — one ranked block per exam
+        (never mixes different exams/subjects into a single rank: comparing
+        a maths score to a history score wouldn't mean anything), filterable
+        by filière/classe/site so a teacher/admin can browse several exams'
+        rankings without opening each one individually. Reuses get_queryset's
+        existing scoping (TeacherScopedContentMixin restricts teachers to
+        their own class/subject; admin/staff see the whole school — exactly
+        the "classement général" the admin side asked for).
+        """
+        qs = self.filter_queryset(self.get_queryset()).filter(is_published=True)
+        program_id = request.query_params.get('filiere')
+        if program_id:
+            qs = qs.filter(class_obj__level__program_id=program_id)
+        qs = qs.select_related('class_obj', 'subject', 'site').order_by('-start_date')
+
+        groups = []
+        for exam in qs:
+            graded = self._rank_sessions(exam)
+            if not graded:
+                continue
+            groups.append({
+                'exam_id': exam.id,
+                'exam_title': exam.title,
+                'subject_name': exam.subject.name if exam.subject_id else ('Global' if exam.is_global else None),
+                'class_name': exam.class_obj.name if exam.class_obj_id else None,
+                'site_name': exam.site.name if exam.site_id else None,
+                'results': [
+                    {
+                        'rank': rank,
+                        'last_name': s.student.user.last_name,
+                        'first_name': s.student.user.first_name,
+                        'matricule': s.student.matricule,
+                        'mention': mention_for_percent(percent),
+                    }
+                    for rank, (s, percent) in enumerate(graded, 1)
+                ],
+            })
+        return Response({'groups': groups})
 
     @action(detail=True, methods=['get'], url_path='my-session')
     def my_session(self, request, pk=None):
