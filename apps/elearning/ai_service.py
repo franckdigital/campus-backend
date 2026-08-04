@@ -38,57 +38,87 @@ GEMINI_RPM_LIMIT = getattr(settings, 'GEMINI_RPM_LIMIT', 12)
 # starve those checks out.
 GEMINI_PRIORITY_RPM_RESERVE = getattr(settings, 'GEMINI_PRIORITY_RPM_RESERVE', 3)
 
+# Groq — fallback vision provider, tried only once Gemini (both keys) is
+# rate-limited/overloaded/unconfigured or every attempt otherwise fails. Free
+# tier, no billing required. Reuses the same requests-based approach as the
+# Gemini call below (no extra SDK dependency) against Groq's OpenAI-compatible
+# chat completions endpoint with a vision-capable Llama 4 model.
+GROQ_API_KEY = getattr(settings, 'GROQ_API_KEY', '')
+GROQ_VISION_MODEL = getattr(settings, 'GROQ_VISION_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct')
+GROQ_RPM_LIMIT = getattr(settings, 'GROQ_RPM_LIMIT', 25)
+GROQ_PRIORITY_RPM_RESERVE = getattr(settings, 'GROQ_PRIORITY_RPM_RESERVE', 5)
+
 # One process-wide semaphore shared by every request this worker process
 # handles (analyze_exam_snapshot runs as a synchronous DRF view, so each
-# concurrent call occupies its own thread while it blocks on Gemini's
-# network I/O). Bounds how many Gemini calls can be in flight at once so a
-# burst of concurrent exam-takers doesn't fire dozens of parallel requests
-# that (a) collectively exceed the account's own rate limit — every one of
-# them coming back 429 — and (b) exhaust the ASGI sync-view thread pool,
-# which used to make *unrelated* requests across the whole app queue up
-# behind these slow, blocking calls too. Excess requests wait briefly for a
-# free slot (acquire has its own short timeout below) instead of piling up
-# unboundedly.
-_gemini_semaphore = threading.Semaphore(GEMINI_MAX_CONCURRENT_REQUESTS)
-
-# Sliding-window (last 60s) request counter, checked *before* even touching
-# the semaphore/network — cheap, in-memory, and specifically caps the actual
-# requests-per-minute rate against GEMINI_RPM_LIMIT, which the semaphore
-# above cannot do on its own (a burst of short, fast requests can blow past
-# an RPM budget while never having more than a couple in flight at once).
-# Process-local: on a deployment with multiple Daphne/Gunicorn worker
-# processes each process gets its own independent budget, so the effective
-# total is (GEMINI_RPM_LIMIT × process count) — fine for the single/few
-# -process scale this project runs at; move to a Redis-backed counter
-# (REDIS_URL is already configured for Channels/Celery) if that stops
-# holding.
-_rpm_lock = threading.Lock()
-_rpm_timestamps = deque()          # monotonic times of general (non-priority) grants in the last 60s
-_rpm_priority_timestamps = deque() # monotonic times of priority grants in the last 60s
+# concurrent call occupies its own thread while it blocks on the vision
+# provider's network I/O). Bounds how many snapshot-analysis calls (Gemini
+# or, on fallback, Groq) can be in flight at once so a burst of concurrent
+# exam-takers doesn't fire dozens of parallel requests that (a) collectively
+# exceed a provider's own rate limit — every one of them coming back 429 —
+# and (b) exhaust the ASGI sync-view thread pool, which used to make
+# *unrelated* requests across the whole app queue up behind these slow,
+# blocking calls too. Excess requests wait briefly for a free slot (acquire
+# has its own short timeout below) instead of piling up unboundedly.
+_vision_semaphore = threading.Semaphore(GEMINI_MAX_CONCURRENT_REQUESTS)
 
 
-def _try_acquire_rpm_slot(priority: bool) -> bool:
-    now = time.monotonic()
-    cutoff = now - 60
-    with _rpm_lock:
-        while _rpm_timestamps and _rpm_timestamps[0] < cutoff:
-            _rpm_timestamps.popleft()
-        while _rpm_priority_timestamps and _rpm_priority_timestamps[0] < cutoff:
-            _rpm_priority_timestamps.popleft()
-        total_used = len(_rpm_timestamps) + len(_rpm_priority_timestamps)
-        if priority:
-            # Priority traffic can draw on the whole budget, not just its
-            # reserve — the reserve only exists to protect it *from*
-            # general traffic, not to cap it below general's own share.
-            if total_used >= GEMINI_RPM_LIMIT:
+class _RpmLimiter:
+    """Sliding-window (last 60s) requests-per-minute budget, checked *before*
+    even touching the semaphore/network — cheap, in-memory, and specifically
+    caps the actual requests-per-minute rate against `limit`, which the
+    semaphore above cannot do on its own (a burst of short, fast requests can
+    blow past an RPM budget while never having more than a couple in flight
+    at once).
+
+    `priority_reserve` carves out a slice of `limit` exclusively for
+    `priority` calls — checking whether an *already suspended* student keeps
+    misbehaving is the highest-value use of scarce quota (see
+    SecureExamTakeScreen.js's suspension-escalation flow), so a burst of
+    routine first-time checks from other students can never fully starve
+    those checks out.
+
+    One instance per vision provider (Gemini, Groq) — each has its own
+    independent quota. Process-local: on a deployment with multiple
+    Daphne/Gunicorn worker processes each process gets its own independent
+    budget, so the effective total is (limit × process count) — fine at the
+    single/few-process scale this project runs at; move to a Redis-backed
+    counter (REDIS_URL is already configured for Channels/Celery) if that
+    stops holding.
+    """
+
+    def __init__(self, limit: int, priority_reserve: int = 0):
+        self.limit = limit
+        self.priority_reserve = priority_reserve
+        self._lock = threading.Lock()
+        self._general = deque()   # monotonic times of general (non-priority) grants in the last 60s
+        self._priority = deque()  # monotonic times of priority grants in the last 60s
+
+    def try_acquire(self, priority: bool) -> bool:
+        now = time.monotonic()
+        cutoff = now - 60
+        with self._lock:
+            while self._general and self._general[0] < cutoff:
+                self._general.popleft()
+            while self._priority and self._priority[0] < cutoff:
+                self._priority.popleft()
+            total_used = len(self._general) + len(self._priority)
+            if priority:
+                # Priority traffic can draw on the whole budget, not just its
+                # reserve — the reserve only exists to protect it *from*
+                # general traffic, not to cap it below general's own share.
+                if total_used >= self.limit:
+                    return False
+                self._priority.append(now)
+                return True
+            general_budget = max(self.limit - self.priority_reserve, 0)
+            if len(self._general) >= general_budget:
                 return False
-            _rpm_priority_timestamps.append(now)
+            self._general.append(now)
             return True
-        general_budget = max(GEMINI_RPM_LIMIT - GEMINI_PRIORITY_RPM_RESERVE, 0)
-        if len(_rpm_timestamps) >= general_budget:
-            return False
-        _rpm_timestamps.append(now)
-        return True
+
+
+_gemini_rpm = _RpmLimiter(GEMINI_RPM_LIMIT, GEMINI_PRIORITY_RPM_RESERVE)
+_groq_rpm = _RpmLimiter(GROQ_RPM_LIMIT, GROQ_PRIORITY_RPM_RESERVE)
 
 
 def _call_claude(system_prompt: str, messages: list[dict], max_tokens: int = 2048) -> tuple[str, int]:
@@ -238,61 +268,55 @@ def _gemini_stub_result(reason: str) -> dict:
     }
 
 
-def analyze_exam_snapshot(image_bytes: bytes, priority: bool = False) -> dict:
-    """Proctoring — Gemini vision analysis of one exam webcam snapshot.
+_SNAPSHOT_PROMPT = (
+    "Tu es un système de surveillance d'examen en ligne. Regarde très attentivement cette "
+    "capture webcam d'un(e) étudiant(e) en train de composer — y compris les bords de "
+    "l'image et tout ce que la personne tient dans ses mains ou près de son visage, même "
+    "partiellement visible ou flou — et décris EXACTEMENT ce que tu observes, en une phrase "
+    "courte et factuelle en français. Sois précis et concret, par exemple : \"L'étudiant "
+    "regarde son téléphone posé à côté du clavier\", \"Une deuxième personne est visible "
+    "derrière l'étudiant\", \"L'étudiant semble parler à quelqu'un hors champ\", \"L'étudiant "
+    "tient un téléphone ou un objet devant son visage\", \"Aucune anomalie, l'étudiant "
+    "regarde son écran normalement\". En cas de doute sur la présence d'un téléphone ou d'un "
+    "objet tenu en main, signale-le plutôt que de l'ignorer (mieux vaut un faux positif "
+    "qu'une fraude manquée). Regarde aussi où pointe le regard/la tête de l'étudiant : un "
+    "regard bref vers le clavier ou le bas de l'écran est normal, mais un regard clairement "
+    "détourné et soutenu — vers le haut (au plafond), la gauche, la droite, ou carrément "
+    "retourné vers l'arrière/le côté (comme pour regarder quelqu'un ou quelque chose hors "
+    "champ) — doit être signalé avec la direction observée."
+)
 
-    Unlike the boolean-only client-side TensorFlow.js detection, this asks a
-    real vision model to describe in plain French exactly what it observes
-    (talking to someone off-camera, looking at a phone, a second person in
-    frame...), not just "phone: yes/no". Returns a dict always shaped the
-    same way — including a 'description' string suitable for direct display
-    next to the snapshot in the admin review screen — so callers never need
-    to special-case a missing/failed analysis.
 
-    `priority=True` marks a check for a session that's *already suspended*
-    (verifying whether the student keeps misbehaving during the suspension —
-    see SecureExamTakeScreen.js) — the single highest-value use of a scarce
-    Gemini quota, so it draws from a reserved slice of the rate budget that
-    routine first-offense checks can't touch (see GEMINI_PRIORITY_RPM_RESERVE).
+def _parse_snapshot_verdict(parsed: dict) -> dict:
+    """Shared shaping of a provider's parsed JSON into the dict every caller expects."""
+    return {
+        'description': parsed.get('description') or 'Analyse indisponible.',
+        'face_detected': parsed.get('face_detected', True),
+        'phone_detected': parsed.get('phone_detected', False),
+        'multiple_faces': parsed.get('multiple_faces', False),
+        'suspicious': parsed.get('suspicious', False),
+        'looking_away': parsed.get('looking_away', False),
+        'gaze_direction': parsed.get('gaze_direction') or 'aucun',
+        'ai_available': True,
+    }
 
-    Falls back to a neutral stub (no flags raised) if GEMINI_API_KEY isn't
-    configured, the rate/concurrency budget is exhausted, or the call fails,
-    so proctoring degrades gracefully instead of crashing when the free-tier
-    key is absent or rate-limited.
-    """
+
+def _analyze_with_gemini(img_b64: str, priority: bool) -> dict | None:
+    """Try Gemini (primary key, then GEMINI_API_KEY_2 on 429/503). Returns
+    None — never the stub — on any failure so the caller can fall through to
+    Groq; only the top-level analyze_exam_snapshot returns the stub."""
     if not GEMINI_API_KEY and not GEMINI_API_KEY_2:
-        return _gemini_stub_result("Analyse IA indisponible (GEMINI_API_KEY non configurée).")
+        return None
 
-    if not _try_acquire_rpm_slot(priority):
+    if not _gemini_rpm.try_acquire(priority):
         # Known in advance we'd very likely just get a 429 back — don't even
-        # spend a semaphore slot or a network round-trip finding that out;
-        # conserve the budget for the next capture instead.
+        # spend a network round-trip finding that out; conserve the budget
+        # for the next capture instead.
         logger.info('Gemini snapshot analysis skipped — RPM budget (%s/min, priority=%s) exhausted.', GEMINI_RPM_LIMIT, priority)
-        return _gemini_stub_result(
-            "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
-        )
+        return None
 
-    import base64
     import requests
 
-    img_b64 = base64.b64encode(image_bytes).decode()
-    prompt = (
-        "Tu es un système de surveillance d'examen en ligne. Regarde très attentivement cette "
-        "capture webcam d'un(e) étudiant(e) en train de composer — y compris les bords de "
-        "l'image et tout ce que la personne tient dans ses mains ou près de son visage, même "
-        "partiellement visible ou flou — et décris EXACTEMENT ce que tu observes, en une phrase "
-        "courte et factuelle en français. Sois précis et concret, par exemple : \"L'étudiant "
-        "regarde son téléphone posé à côté du clavier\", \"Une deuxième personne est visible "
-        "derrière l'étudiant\", \"L'étudiant semble parler à quelqu'un hors champ\", \"L'étudiant "
-        "tient un téléphone ou un objet devant son visage\", \"Aucune anomalie, l'étudiant "
-        "regarde son écran normalement\". En cas de doute sur la présence d'un téléphone ou d'un "
-        "objet tenu en main, signale-le plutôt que de l'ignorer (mieux vaut un faux positif "
-        "qu'une fraude manquée). Regarde aussi où pointe le regard/la tête de l'étudiant : un "
-        "regard bref vers le clavier ou le bas de l'écran est normal, mais un regard clairement "
-        "détourné et soutenu — vers le haut (au plafond), la gauche, la droite, ou carrément "
-        "retourné vers l'arrière/le côté (comme pour regarder quelqu'un ou quelque chose hors "
-        "champ) — doit être signalé avec la direction observée."
-    )
     response_schema = {
         'type': 'OBJECT',
         'properties': {
@@ -310,105 +334,205 @@ def analyze_exam_snapshot(image_bytes: bytes, priority: bool = False) -> dict:
         ],
     }
 
-    # Bound how long a request waits for a free concurrency slot before
-    # giving up — under a genuine burst (dozens of students' captures
-    # landing at once), queuing forever here would just move the pile-up
-    # from "blocked on Gemini" to "blocked on this semaphore", tying up the
-    # same worker threads either way. Failing fast into the neutral stub
-    # after a few seconds keeps this one slow proctoring tick from blocking
-    # the thread indefinitely — the next capture (a few seconds later) tries
-    # again on its own.
-    if not _gemini_semaphore.acquire(timeout=8):
-        logger.warning('Gemini snapshot analysis skipped — concurrency limit (%s) reached.', GEMINI_MAX_CONCURRENT_REQUESTS)
-        return _gemini_stub_result(
-            "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
-        )
-
     # Primary key first, second account only as a fallback — see
     # GEMINI_API_KEY_2's comment above. Filters out an unconfigured second
     # key so single-account installs behave exactly as before.
     keys_to_try = [k for k in (GEMINI_API_KEY, GEMINI_API_KEY_2) if k]
 
-    try:
-        # Two attempts per key, short timeout each — worst case this call
-        # blocks its thread for roughly (6 + 1 + 6) = 13s per key instead of
-        # the ~65s it could reach at 3 attempts × 20s timeout with a growing
-        # sleep backoff. That budget matters a lot under concurrent load:
-        # every second a thread spends blocked here is a second it can't
-        # serve any other request (this view runs synchronously), so a
-        # handful of slow calls used to be enough to exhaust the whole app's
-        # request-handling capacity, not just this endpoint's.
-        max_attempts = 2
-        last_error = None
-        for key_index, api_key in enumerate(keys_to_try):
-            for attempt in range(max_attempts):
-                try:
-                    resp = requests.post(
-                        f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
-                        params={'key': api_key},
-                        json={
-                            'contents': [{
-                                'parts': [
-                                    {'text': prompt},
-                                    {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
-                                ],
-                            }],
-                            'generationConfig': {
-                                'temperature': 0.1,
-                                'responseMimeType': 'application/json',
-                                # A strict schema (rather than just prompting for JSON)
-                                # is what actually guarantees well-formed, complete
-                                # output — responseMimeType alone still occasionally
-                                # produced JSON that failed to parse.
-                                'responseSchema': response_schema,
-                                'maxOutputTokens': 800,
-                                # Newer Gemini models spend part of the output token
-                                # budget on hidden "thinking" tokens by default — for a
-                                # one-sentence classification task that just silently
-                                # truncates the actual JSON answer before it's written.
-                                'thinkingConfig': {'thinkingBudget': 0},
-                            },
+    # Two attempts per key, short timeout each — worst case this call blocks
+    # its thread for roughly (6 + 1 + 6) = 13s per key instead of the ~65s it
+    # could reach at 3 attempts × 20s timeout with a growing sleep backoff.
+    # That budget matters a lot under concurrent load: every second a thread
+    # spends blocked here is a second it can't serve any other request (this
+    # view runs synchronously), so a handful of slow calls used to be enough
+    # to exhaust the whole app's request-handling capacity, not just this
+    # endpoint's.
+    max_attempts = 2
+    last_error = None
+    for key_index, api_key in enumerate(keys_to_try):
+        for attempt in range(max_attempts):
+            try:
+                resp = requests.post(
+                    f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
+                    params={'key': api_key},
+                    json={
+                        'contents': [{
+                            'parts': [
+                                {'text': _SNAPSHOT_PROMPT},
+                                {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
+                            ],
+                        }],
+                        'generationConfig': {
+                            'temperature': 0.1,
+                            'responseMimeType': 'application/json',
+                            # A strict schema (rather than just prompting for JSON)
+                            # is what actually guarantees well-formed, complete
+                            # output — responseMimeType alone still occasionally
+                            # produced JSON that failed to parse.
+                            'responseSchema': response_schema,
+                            'maxOutputTokens': 800,
+                            # Newer Gemini models spend part of the output token
+                            # budget on hidden "thinking" tokens by default — for a
+                            # one-sentence classification task that just silently
+                            # truncates the actual JSON answer before it's written.
+                            'thinkingConfig': {'thinkingBudget': 0},
                         },
-                        timeout=6,
-                    )
-                    resp.raise_for_status()
-                    text = resp.json()['candidates'][0]['content']['parts'][0]['text']
-                    parsed = json.loads(text)
-                    return {
-                        'description': parsed.get('description') or 'Analyse indisponible.',
-                        'face_detected': parsed.get('face_detected', True),
-                        'phone_detected': parsed.get('phone_detected', False),
-                        'multiple_faces': parsed.get('multiple_faces', False),
-                        'suspicious': parsed.get('suspicious', False),
-                        'looking_away': parsed.get('looking_away', False),
-                        'gaze_direction': parsed.get('gaze_direction') or 'aucun',
-                        'ai_available': True,
-                    }
-                except requests.exceptions.HTTPError as e:
-                    last_error = e
-                    status_code = e.response.status_code if e.response is not None else None
-                    # 429 (rate limited) and 503 (momentarily overloaded) are
-                    # transient on Google's side — worth one quick retry on
-                    # the SAME key. Anything else (401 bad key, 400 bad
-                    # request...) won't succeed on retry, so fail fast to the
-                    # next key (if any) instead of burning the request
-                    # budget (and holding the semaphore slot longer).
-                    if status_code not in (429, 503) or attempt == max_attempts - 1:
-                        if status_code in (429, 503) and key_index < len(keys_to_try) - 1:
-                            logger.info('Gemini key #%s rate-limited/overloaded, falling back to key #%s.', key_index + 1, key_index + 2)
-                        break
-                    time.sleep(1.0)
-                except Exception as e:
-                    last_error = e
+                    },
+                    timeout=6,
+                )
+                resp.raise_for_status()
+                text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+                return _parse_snapshot_verdict(json.loads(text))
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                status_code = e.response.status_code if e.response is not None else None
+                # 429 (rate limited) and 503 (momentarily overloaded) are
+                # transient on Google's side — worth one quick retry on
+                # the SAME key. Anything else (401 bad key, 400 bad
+                # request...) won't succeed on retry, so fail fast to the
+                # next key (if any) instead of burning the request
+                # budget (and holding the semaphore slot longer).
+                if status_code not in (429, 503) or attempt == max_attempts - 1:
+                    if status_code in (429, 503) and key_index < len(keys_to_try) - 1:
+                        logger.info('Gemini key #%s rate-limited/overloaded, falling back to key #%s.', key_index + 1, key_index + 2)
                     break
+                time.sleep(1.0)
+            except Exception as e:
+                last_error = e
+                break
 
-        logger.warning('Gemini snapshot analysis failed after retries (%s key(s) tried): %s', len(keys_to_try), last_error)
-        # Show a clean, non-technical message to the admin instead of the raw
-        # exception (e.g. a Python traceback string) — the real error is still
-        # logged above for debugging. Not marked suspicious: a transient outage
-        # on Google's side isn't evidence of anything about the student.
+    logger.warning('Gemini snapshot analysis failed after retries (%s key(s) tried), falling back to Groq: %s', len(keys_to_try), last_error)
+    return None
+
+
+def _analyze_with_groq(img_b64: str, priority: bool) -> dict | None:
+    """Try Groq (Llama 4 vision model, OpenAI-compatible chat completions
+    endpoint) as the last-resort provider once Gemini is unconfigured,
+    rate-limited, or otherwise failing. Returns None on any failure — the
+    caller falls through to the neutral stub."""
+    if not GROQ_API_KEY:
+        return None
+
+    if not _groq_rpm.try_acquire(priority):
+        logger.info('Groq snapshot analysis skipped — RPM budget (%s/min, priority=%s) exhausted.', GROQ_RPM_LIMIT, priority)
+        return None
+
+    import requests
+
+    # Groq's json_object mode guarantees valid JSON but — unlike Gemini's
+    # responseSchema — doesn't enforce a specific shape, so the exact field
+    # names/types are spelled out in the prompt instead and parsed leniently
+    # (same .get(..., default) fallbacks as the Gemini path) in case a field
+    # is ever omitted.
+    schema_hint = (
+        " Réponds UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après, de "
+        "cette forme exacte : "
+        '{"description": "<phrase en français>", "face_detected": <bool>, '
+        '"phone_detected": <bool>, "multiple_faces": <bool>, "suspicious": <bool>, '
+        '"looking_away": <bool>, "gaze_direction": "<haut|bas|gauche|droite|derriere|aucun>"}'
+    )
+
+    max_attempts = 2
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                'https://api.groq.com/openai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {GROQ_API_KEY}'},
+                json={
+                    'model': GROQ_VISION_MODEL,
+                    'messages': [{
+                        'role': 'user',
+                        'content': [
+                            {'type': 'text', 'text': _SNAPSHOT_PROMPT + schema_hint},
+                            {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{img_b64}'}},
+                        ],
+                    }],
+                    'temperature': 0.1,
+                    'max_completion_tokens': 400,
+                    'response_format': {'type': 'json_object'},
+                },
+                timeout=8,
+            )
+            resp.raise_for_status()
+            text = resp.json()['choices'][0]['message']['content']
+            return _parse_snapshot_verdict(json.loads(text))
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            status_code = e.response.status_code if e.response is not None else None
+            if status_code not in (429, 503) or attempt == max_attempts - 1:
+                break
+            time.sleep(1.0)
+        except Exception as e:
+            last_error = e
+            break
+
+    logger.warning('Groq snapshot analysis failed after retries: %s', last_error)
+    return None
+
+
+def analyze_exam_snapshot(image_bytes: bytes, priority: bool = False) -> dict:
+    """Proctoring — vision analysis of one exam webcam snapshot.
+
+    Unlike the boolean-only client-side TensorFlow.js detection, this asks a
+    real vision model to describe in plain French exactly what it observes
+    (talking to someone off-camera, looking at a phone, a second person in
+    frame...), not just "phone: yes/no". Returns a dict always shaped the
+    same way — including a 'description' string suitable for direct display
+    next to the snapshot in the admin review screen — so callers never need
+    to special-case a missing/failed analysis.
+
+    Tries Gemini first (primary key, then GEMINI_API_KEY_2 on 429/503), then
+    falls back to Groq once Gemini is unconfigured or every Gemini attempt
+    fails — two independent free-tier quotas back each other up instead of
+    proctoring going blind the moment one is exhausted.
+
+    `priority=True` marks a check for a session that's *already suspended*
+    (verifying whether the student keeps misbehaving during the suspension —
+    see SecureExamTakeScreen.js) — the single highest-value use of scarce
+    quota, so it draws from a reserved slice of each provider's own rate
+    budget that routine first-offense checks can't touch (see
+    GEMINI_PRIORITY_RPM_RESERVE / GROQ_PRIORITY_RPM_RESERVE).
+
+    Falls back to a neutral stub (no flags raised) if neither provider is
+    configured, both rate/concurrency budgets are exhausted, or both calls
+    fail, so proctoring degrades gracefully instead of crashing.
+    """
+    if not GEMINI_API_KEY and not GEMINI_API_KEY_2 and not GROQ_API_KEY:
+        return _gemini_stub_result("Analyse IA indisponible (aucune clé API configurée).")
+
+    import base64
+    img_b64 = base64.b64encode(image_bytes).decode()
+
+    # Bound how long a request waits for a free concurrency slot before
+    # giving up — under a genuine burst (dozens of students' captures
+    # landing at once), queuing forever here would just move the pile-up
+    # from "blocked on the provider" to "blocked on this semaphore", tying up
+    # the same worker threads either way. Failing fast into the neutral stub
+    # after a few seconds keeps this one slow proctoring tick from blocking
+    # the thread indefinitely — the next capture (a few seconds later) tries
+    # again on its own.
+    if not _vision_semaphore.acquire(timeout=8):
+        logger.warning('Snapshot analysis skipped — concurrency limit (%s) reached.', GEMINI_MAX_CONCURRENT_REQUESTS)
+        return _gemini_stub_result(
+            "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
+        )
+
+    try:
+        result = _analyze_with_gemini(img_b64, priority)
+        if result is not None:
+            return result
+
+        result = _analyze_with_groq(img_b64, priority)
+        if result is not None:
+            return result
+
+        # Show a clean, non-technical message to the admin instead of a raw
+        # exception — the real errors are already logged by each provider
+        # helper above. Not marked suspicious: a transient outage on a
+        # provider's side isn't evidence of anything about the student.
         return _gemini_stub_result(
             "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
         )
     finally:
-        _gemini_semaphore.release()
+        _vision_semaphore.release()
