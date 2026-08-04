@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = getattr(settings, 'ANTHROPIC_API_KEY', '')
 GEMINI_API_KEY = getattr(settings, 'GEMINI_API_KEY', '')
+# Optional second account, used as a fallback ONLY once the first key comes
+# back rate-limited (429) or momentarily overloaded (503) — a school running
+# out of free-tier quota mid-day can add a second Gemini account without any
+# code change, just this env var. Never a load-balancing/round-robin split:
+# the primary key is always tried first so the secondary's own quota is
+# spent only when actually needed.
+GEMINI_API_KEY_2 = getattr(settings, 'GEMINI_API_KEY_2', '')
 GEMINI_VISION_MODEL = getattr(settings, 'GEMINI_VISION_MODEL', 'gemini-2.0-flash')
 GEMINI_MAX_CONCURRENT_REQUESTS = getattr(settings, 'GEMINI_MAX_CONCURRENT_REQUESTS', 12)
 # Real requests-per-minute budget for the configured GEMINI_API_KEY — a
@@ -253,7 +260,7 @@ def analyze_exam_snapshot(image_bytes: bytes, priority: bool = False) -> dict:
     so proctoring degrades gracefully instead of crashing when the free-tier
     key is absent or rate-limited.
     """
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY and not GEMINI_API_KEY_2:
         return _gemini_stub_result("Analyse IA indisponible (GEMINI_API_KEY non configurée).")
 
     if not _try_acquire_rpm_slot(priority):
@@ -317,76 +324,85 @@ def analyze_exam_snapshot(image_bytes: bytes, priority: bool = False) -> dict:
             "Analyse IA momentanément indisponible (service surchargé) — la prochaine capture réessaiera automatiquement."
         )
 
+    # Primary key first, second account only as a fallback — see
+    # GEMINI_API_KEY_2's comment above. Filters out an unconfigured second
+    # key so single-account installs behave exactly as before.
+    keys_to_try = [k for k in (GEMINI_API_KEY, GEMINI_API_KEY_2) if k]
+
     try:
-        # Two attempts, short timeout each — worst case this call blocks its
-        # thread for roughly (6 + 1 + 6) = 13s instead of the ~65s it could
-        # reach at 3 attempts × 20s timeout with a growing sleep backoff.
-        # That budget matters a lot under concurrent load: every second a
-        # thread spends blocked here is a second it can't serve any other
-        # request (this view runs synchronously), so a handful of slow calls
-        # used to be enough to exhaust the whole app's request-handling
-        # capacity, not just this endpoint's.
+        # Two attempts per key, short timeout each — worst case this call
+        # blocks its thread for roughly (6 + 1 + 6) = 13s per key instead of
+        # the ~65s it could reach at 3 attempts × 20s timeout with a growing
+        # sleep backoff. That budget matters a lot under concurrent load:
+        # every second a thread spends blocked here is a second it can't
+        # serve any other request (this view runs synchronously), so a
+        # handful of slow calls used to be enough to exhaust the whole app's
+        # request-handling capacity, not just this endpoint's.
         max_attempts = 2
         last_error = None
-        for attempt in range(max_attempts):
-            try:
-                resp = requests.post(
-                    f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
-                    params={'key': GEMINI_API_KEY},
-                    json={
-                        'contents': [{
-                            'parts': [
-                                {'text': prompt},
-                                {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
-                            ],
-                        }],
-                        'generationConfig': {
-                            'temperature': 0.1,
-                            'responseMimeType': 'application/json',
-                            # A strict schema (rather than just prompting for JSON)
-                            # is what actually guarantees well-formed, complete
-                            # output — responseMimeType alone still occasionally
-                            # produced JSON that failed to parse.
-                            'responseSchema': response_schema,
-                            'maxOutputTokens': 800,
-                            # Newer Gemini models spend part of the output token
-                            # budget on hidden "thinking" tokens by default — for a
-                            # one-sentence classification task that just silently
-                            # truncates the actual JSON answer before it's written.
-                            'thinkingConfig': {'thinkingBudget': 0},
+        for key_index, api_key in enumerate(keys_to_try):
+            for attempt in range(max_attempts):
+                try:
+                    resp = requests.post(
+                        f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_VISION_MODEL}:generateContent',
+                        params={'key': api_key},
+                        json={
+                            'contents': [{
+                                'parts': [
+                                    {'text': prompt},
+                                    {'inline_data': {'mime_type': 'image/jpeg', 'data': img_b64}},
+                                ],
+                            }],
+                            'generationConfig': {
+                                'temperature': 0.1,
+                                'responseMimeType': 'application/json',
+                                # A strict schema (rather than just prompting for JSON)
+                                # is what actually guarantees well-formed, complete
+                                # output — responseMimeType alone still occasionally
+                                # produced JSON that failed to parse.
+                                'responseSchema': response_schema,
+                                'maxOutputTokens': 800,
+                                # Newer Gemini models spend part of the output token
+                                # budget on hidden "thinking" tokens by default — for a
+                                # one-sentence classification task that just silently
+                                # truncates the actual JSON answer before it's written.
+                                'thinkingConfig': {'thinkingBudget': 0},
+                            },
                         },
-                    },
-                    timeout=6,
-                )
-                resp.raise_for_status()
-                text = resp.json()['candidates'][0]['content']['parts'][0]['text']
-                parsed = json.loads(text)
-                return {
-                    'description': parsed.get('description') or 'Analyse indisponible.',
-                    'face_detected': parsed.get('face_detected', True),
-                    'phone_detected': parsed.get('phone_detected', False),
-                    'multiple_faces': parsed.get('multiple_faces', False),
-                    'suspicious': parsed.get('suspicious', False),
-                    'looking_away': parsed.get('looking_away', False),
-                    'gaze_direction': parsed.get('gaze_direction') or 'aucun',
-                    'ai_available': True,
-                }
-            except requests.exceptions.HTTPError as e:
-                last_error = e
-                status_code = e.response.status_code if e.response is not None else None
-                # 429 (rate limited) and 503 (momentarily overloaded) are
-                # transient on Google's side — worth one quick retry.
-                # Anything else (401 bad key, 400 bad request...) won't
-                # succeed on retry, so fail fast instead of burning the
-                # request budget (and holding the semaphore slot longer).
-                if status_code not in (429, 503) or attempt == max_attempts - 1:
+                        timeout=6,
+                    )
+                    resp.raise_for_status()
+                    text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+                    parsed = json.loads(text)
+                    return {
+                        'description': parsed.get('description') or 'Analyse indisponible.',
+                        'face_detected': parsed.get('face_detected', True),
+                        'phone_detected': parsed.get('phone_detected', False),
+                        'multiple_faces': parsed.get('multiple_faces', False),
+                        'suspicious': parsed.get('suspicious', False),
+                        'looking_away': parsed.get('looking_away', False),
+                        'gaze_direction': parsed.get('gaze_direction') or 'aucun',
+                        'ai_available': True,
+                    }
+                except requests.exceptions.HTTPError as e:
+                    last_error = e
+                    status_code = e.response.status_code if e.response is not None else None
+                    # 429 (rate limited) and 503 (momentarily overloaded) are
+                    # transient on Google's side — worth one quick retry on
+                    # the SAME key. Anything else (401 bad key, 400 bad
+                    # request...) won't succeed on retry, so fail fast to the
+                    # next key (if any) instead of burning the request
+                    # budget (and holding the semaphore slot longer).
+                    if status_code not in (429, 503) or attempt == max_attempts - 1:
+                        if status_code in (429, 503) and key_index < len(keys_to_try) - 1:
+                            logger.info('Gemini key #%s rate-limited/overloaded, falling back to key #%s.', key_index + 1, key_index + 2)
+                        break
+                    time.sleep(1.0)
+                except Exception as e:
+                    last_error = e
                     break
-                time.sleep(1.0)
-            except Exception as e:
-                last_error = e
-                break
 
-        logger.warning('Gemini snapshot analysis failed after retries: %s', last_error)
+        logger.warning('Gemini snapshot analysis failed after retries (%s key(s) tried): %s', len(keys_to_try), last_error)
         # Show a clean, non-technical message to the admin instead of the raw
         # exception (e.g. a Python traceback string) — the real error is still
         # logged above for debugging. Not marked suspicious: a transient outage
