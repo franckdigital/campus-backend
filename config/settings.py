@@ -285,6 +285,9 @@ ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
 # aistudio.google.com). Without this, snapshot analysis falls back to a
 # neutral stub (no anomaly flags raised, description says AI is unconfigured).
 GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
+# Optional second Gemini account/key, tried only once the first comes back
+# rate-limited (429) or overloaded (503) — see ai_service.py's keys_to_try.
+GEMINI_API_KEY_2 = config('GEMINI_API_KEY_2', default='')
 GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-flash-latest')
 # Caps how many analyze_exam_snapshot calls can be in flight at once across
 # this process (see the semaphore in ai_service.py) — protects against a
@@ -304,6 +307,18 @@ GEMINI_RPM_LIMIT = config('GEMINI_RPM_LIMIT', default=12, cast=int)
 # sessions (verifying whether the student keeps misbehaving mid-suspension)
 # so routine first-offense checks on other students can't starve them out.
 GEMINI_PRIORITY_RPM_RESERVE = config('GEMINI_PRIORITY_RPM_RESERVE', default=3, cast=int)
+
+# Groq API — used by apps.elearning.ai_service.analyze_exam_snapshot as a
+# fallback vision provider once both Gemini keys are rate-limited/overloaded
+# or unconfigured (free tier, no billing required — get a key at
+# console.groq.com). Uses a Llama 4 vision model via Groq's OpenAI-compatible
+# chat completions endpoint.
+GROQ_API_KEY = config('GROQ_API_KEY', default='')
+GROQ_VISION_MODEL = config('GROQ_VISION_MODEL', default='meta-llama/llama-4-scout-17b-16e-instruct')
+# Same sliding-window RPM budget as GEMINI_RPM_LIMIT, sized conservatively
+# for Groq's free tier. Raise once billing is enabled on the Groq project.
+GROQ_RPM_LIMIT = config('GROQ_RPM_LIMIT', default=25, cast=int)
+GROQ_PRIORITY_RPM_RESERVE = config('GROQ_PRIORITY_RPM_RESERVE', default=5, cast=int)
 
 # Zoom Configuration
 ZOOM_API_KEY = config('ZOOM_API_KEY', default='')
