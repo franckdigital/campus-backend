@@ -855,6 +855,14 @@ class SecureExam(BaseModel):
     # escam-react), seule plateforme implémentant les pauses (pas côté mobile).
     break_duration_minutes = models.PositiveIntegerField(default=3)
     break_interval_minutes = models.PositiveIntegerField(default=30)
+    # Combien de secondes de regard détourné soutenu (haut/bas/gauche/droite/
+    # derrière — voir ai_service.py's gaze_direction) avant suspension —
+    # réglable par examen. Le webcam capture toutes les WEBCAM_INTERVAL
+    # (30s, fixe côté web) / DETECT_INTERVAL (5s, fixe côté mobile) ; le
+    # frontend calcule combien de captures consécutives "détourné" ce délai
+    # représente pour chaque plateforme (voir ExamPage.jsx/
+    # SecureExamTakeScreen.js).
+    gaze_away_seconds = models.PositiveIntegerField(default=30)
 
     is_published = models.BooleanField(default=False)
     pass_score_percent = models.PositiveSmallIntegerField(default=50)
