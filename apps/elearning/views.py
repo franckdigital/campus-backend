@@ -1508,9 +1508,18 @@ class ExamSessionSnapshotView(APIView):
         if getattr(user, 'user_type', None) not in ('ADMIN', 'STAFF'):
             teacher = getattr(user, 'teacher_profile', None)
             exam = session.exam
-            owns = teacher and teacher.class_subjects.filter(
-                class_obj=exam.class_obj, subject=exam.subject, is_active=True
-            ).exists()
+            # Honor an admin's direct teacher assignment (SecureExam.teacher) in
+            # addition to the class_subjects timetable match — TeacherScopedContentMixin
+            # .get_queryset already lets such exams show up in this teacher's own list
+            # (see its `scope |= Q(teacher=teacher)` branch), so denying the actual
+            # grade/snapshot/delete action here would silently contradict that and leave
+            # the teacher unable to act on an exam they can see and were assigned.
+            owns = teacher and (
+                exam.teacher_id == teacher.id or
+                teacher.class_subjects.filter(
+                    class_obj=exam.class_obj, subject=exam.subject, is_active=True
+                ).exists()
+            )
             if not owns:
                 raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
 
@@ -1593,9 +1602,18 @@ class ExamSessionGradeView(APIView):
         if getattr(user, 'user_type', None) not in ('ADMIN', 'STAFF'):
             teacher = getattr(user, 'teacher_profile', None)
             exam = session.exam
-            owns = teacher and teacher.class_subjects.filter(
-                class_obj=exam.class_obj, subject=exam.subject, is_active=True
-            ).exists()
+            # Honor an admin's direct teacher assignment (SecureExam.teacher) in
+            # addition to the class_subjects timetable match — TeacherScopedContentMixin
+            # .get_queryset already lets such exams show up in this teacher's own list
+            # (see its `scope |= Q(teacher=teacher)` branch), so denying the actual
+            # grade/snapshot/delete action here would silently contradict that and leave
+            # the teacher unable to act on an exam they can see and were assigned.
+            owns = teacher and (
+                exam.teacher_id == teacher.id or
+                teacher.class_subjects.filter(
+                    class_obj=exam.class_obj, subject=exam.subject, is_active=True
+                ).exists()
+            )
             if not owns:
                 raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
 
@@ -1659,9 +1677,18 @@ class ExamSessionDeleteView(APIView):
         if getattr(user, 'user_type', None) not in ('ADMIN', 'STAFF'):
             teacher = getattr(user, 'teacher_profile', None)
             exam = session.exam
-            owns = teacher and teacher.class_subjects.filter(
-                class_obj=exam.class_obj, subject=exam.subject, is_active=True
-            ).exists()
+            # Honor an admin's direct teacher assignment (SecureExam.teacher) in
+            # addition to the class_subjects timetable match — TeacherScopedContentMixin
+            # .get_queryset already lets such exams show up in this teacher's own list
+            # (see its `scope |= Q(teacher=teacher)` branch), so denying the actual
+            # grade/snapshot/delete action here would silently contradict that and leave
+            # the teacher unable to act on an exam they can see and were assigned.
+            owns = teacher and (
+                exam.teacher_id == teacher.id or
+                teacher.class_subjects.filter(
+                    class_obj=exam.class_obj, subject=exam.subject, is_active=True
+                ).exists()
+            )
             if not owns:
                 raise PermissionDenied("Vous n'enseignez pas cette matière pour cette classe.")
 
