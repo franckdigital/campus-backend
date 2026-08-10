@@ -49,7 +49,7 @@ from .serializers import (
     CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
 from .services import ZoomService
-from apps.academic.models import Session, Enrollment, Subject
+from apps.academic.models import Session, Enrollment
 from apps.students.models import Student
 
 
@@ -1706,8 +1706,21 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         "absent" en sont tous deux exclus (ni traités comme un 0, ni ignorés
         silencieusement au point de fausser la comparaison : ils sont
         simplement absents du calcul tant qu'aucune note n'existe).
+        `subject_name` filtre par NOM de matière (pas par `subject` FK) —
+        volontairement différent de ranking_overview/absences_overview.
+        Cette cohorte fusionne son tableau par NOM de matière (deux examens
+        de deux classes différentes intitulés "Management des Organisations"
+        deviennent une seule colonne), donc filtrer par une seule Subject FK
+        précise — comme le fait le filtre `subject` standard via
+        filterset_fields — ne matcherait que LA copie de matière rattachée à
+        cet id, ratant les autres si la même matière existe comme plusieurs
+        lignes Subject distinctes en base (un cas réel ici, l'école créant
+        parfois une matière par filière plutôt que de réutiliser une matière
+        partagée) : le classement se viderait à tort pour cette combinaison
+        précise, sans qu'aucune donnée ne manque réellement.
         """
         program_id = request.query_params.get('filiere')
+        subject_name_filter = request.query_params.get('subject_name')
 
         exam_qs = self.filter_queryset(self.get_queryset()).filter(
             is_published=True, class_obj__isnull=False
@@ -1730,9 +1743,11 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             level = class_obj.level
             if not level or not level.program_id:
                 continue
+            subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
+            if subject_name_filter and subject_name != subject_name_filter:
+                continue
             cohort_key, cohort_label = _ranking_cohort(class_obj)
             cohort_labels[cohort_key] = cohort_label
-            subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
             coefficient = float(exam.coefficient or 1)
             # Always a column, whether or not anyone's been graded yet — the
             # column shows blank/pending for a still-uncorrected subject
@@ -1842,15 +1857,23 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         cette filière. Sans ça, choisir une matière non enseignée dans la
         filière renvoie toujours un classement vide, ce qui se lit à tort
         comme "le filtre est cassé" plutôt que comme un choix incohérent.
+
+        Dédupliqué par NOM de matière plutôt que par Subject.id — même
+        raison que le filtre `subject_name` de class_ranking : la même
+        matière peut exister comme plusieurs lignes Subject distinctes en
+        base (une par filière), et class_ranking fusionne déjà son tableau
+        par nom. `id` est donc ici littéralement le nom de la matière (c'est
+        cette valeur, pas une Subject FK, qu'il faut renvoyer à class-ranking
+        via le paramètre `subject_name`).
         """
         program_id = request.query_params.get('filiere')
         if not program_id:
             return Response({'subjects': []})
-        subject_ids = self.filter_queryset(self.get_queryset()).filter(
+        exam_qs = self.filter_queryset(self.get_queryset()).filter(
             is_published=True, class_obj__level__program_id=program_id, subject__isnull=False
-        ).values_list('subject_id', flat=True).distinct()
-        subjects = Subject.objects.filter(id__in=subject_ids).order_by('name')
-        return Response({'subjects': [{'id': s.id, 'name': s.name} for s in subjects]})
+        ).select_related('subject')
+        names = sorted({exam.subject.name for exam in exam_qs})
+        return Response({'subjects': [{'id': name, 'name': name} for name in names]})
 
     @action(detail=True, methods=['get'], url_path='my-session')
     def my_session(self, request, pk=None):
