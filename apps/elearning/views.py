@@ -1692,6 +1692,16 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         effectivement notées dans la cohorte, pour construire les colonnes
         du tableau côté client ; `notes` donne la note de l'étudiant (sur
         20) dans chacune.
+
+        Une matière NOTÉE POUR AU MOINS UN AUTRE ÉTUDIANT DE SA CLASSE mais
+        absente chez cet étudiant compte pour 0 dans sa moyenne pondérée
+        (au lieu d'être simplement ignorée) — sinon un étudiant avec moins
+        de copies corrigées se retrouvait avec une moyenne calculée sur une
+        base plus restreinte que ses camarades, potentiellement flatteuse
+        par rapport à eux. Une matière que PERSONNE dans la classe n'a
+        encore reçue (correction pas encore faite) ne compte en revanche
+        pour personne, pour ne pas pénaliser toute une classe à cause d'un
+        simple retard de correction.
         """
         program_id = request.query_params.get('filiere')
 
@@ -1704,10 +1714,14 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
 
         subjects_by_cohort = defaultdict(set)
         cohort_labels = {}
-        # cohort_key -> student_id -> accumulator (weighted sum/total for the
-        # coefficient-weighted average, raw percents per subject to average
-        # into a display note if the same subject has >1 exam, plus the
-        # student's own filière/classe since a cohort can span several).
+        # class_id -> subject_name -> coefficient, but only for subjects with
+        # at least one graded session in that class — the denominator for
+        # each of that class's students' weighted average (see docstring).
+        class_subject_coef = defaultdict(dict)
+        # cohort_key -> student_id -> accumulator: raw percents per subject
+        # (averaged into a display note if the same subject has >1 exam),
+        # plus the student's own filière/classe since a cohort can span
+        # several classes/filières.
         students_by_cohort = defaultdict(dict)
 
         for exam in exam_qs:
@@ -1719,7 +1733,10 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             cohort_labels[cohort_key] = cohort_label
             subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
             coefficient = float(exam.coefficient or 1)
-            for session, percent in self._rank_sessions(exam):
+            graded = self._rank_sessions(exam)
+            if graded:
+                class_subject_coef[class_obj.id][subject_name] = coefficient
+            for session, percent in graded:
                 subjects_by_cohort[cohort_key].add(subject_name)
                 student = students_by_cohort[cohort_key].setdefault(session.student_id, {
                     'last_name': session.student.user.last_name,
@@ -1727,31 +1744,40 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                     'matricule': session.student.matricule,
                     'filiere_code': level.program.code or '',
                     'class_name': class_obj.name,
-                    'weighted_sum': 0.0,
-                    'weight_total': 0.0,
+                    'class_id': class_obj.id,
                     'raw_notes': defaultdict(list),
                 })
-                student['weighted_sum'] += percent * coefficient
-                student['weight_total'] += coefficient
                 student['raw_notes'][subject_name].append(percent)
 
         cohorts = []
         for cohort_key, students_acc in students_by_cohort.items():
             students = []
             for acc in students_acc.values():
-                if acc['weight_total'] <= 0:
+                subject_coefs = class_subject_coef.get(acc['class_id'], {})
+                weighted_sum = 0.0
+                weight_total = 0.0
+                notes = {}
+                for subj, coef in subject_coefs.items():
+                    weight_total += coef
+                    vals = acc['raw_notes'].get(subj)
+                    if vals:
+                        avg_percent = sum(vals) / len(vals)
+                        weighted_sum += avg_percent * coef
+                        notes[subj] = round(avg_percent / 100 * 20, 2)
+                    # else: missing but graded for classmates -> counts as 0
+                    # in weighted_sum (weight_total still includes it), and
+                    # stays absent from `notes` so the cell renders as "—"
+                    # rather than a misleading literal 0.
+                if weight_total <= 0:
                     continue
-                weighted_percent = acc['weighted_sum'] / acc['weight_total']
+                weighted_percent = weighted_sum / weight_total
                 students.append({
                     'last_name': acc['last_name'],
                     'first_name': acc['first_name'],
                     'matricule': acc['matricule'],
                     'filiere_code': acc['filiere_code'],
                     'class_name': acc['class_name'],
-                    'notes': {
-                        subj: round(sum(vals) / len(vals) / 100 * 20, 2)
-                        for subj, vals in acc['raw_notes'].items()
-                    },
+                    'notes': notes,
                     'weighted_average': round(weighted_percent / 100 * 20, 2),
                     '_sort': weighted_percent,
                 })
