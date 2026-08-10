@@ -492,12 +492,23 @@ class SecureExamSerializer(serializers.ModelSerializer):
     # students to add; students_detail (read-only) gives back name/matricule
     # so the picker can show who's already assigned when editing an exam.
     students_detail = serializers.SerializerMethodField()
+    # Populated by SecureExamViewSet.get_queryset()'s annotation — None when
+    # the instance didn't come through that queryset (defensive, shouldn't
+    # happen in practice since every serializer use here does).
+    sessions_count = serializers.SerializerMethodField()
+    graded_sessions_count = serializers.SerializerMethodField()
 
     def get_students_detail(self, obj):
         return [
             {'id': str(s.id), 'name': s.user.full_name, 'matricule': s.matricule}
             for s in obj.students.select_related('user').all()
         ]
+
+    def get_sessions_count(self, obj):
+        return getattr(obj, 'sessions_count', None)
+
+    def get_graded_sessions_count(self, obj):
+        return getattr(obj, 'graded_sessions_count', None)
 
     def to_internal_value(self, data):
         # When frontend sends subject_file as a string URL (existing file), strip it.
@@ -523,6 +534,7 @@ class SecureExamSerializer(serializers.ModelSerializer):
             'is_published', 'pass_score_percent', 'coefficient',
             'max_score', 'subject_file', 'exam_pdf', 'pdf_extra_duration',
             'is_available', 'my_session', 'is_active', 'created_at',
+            'sessions_count', 'graded_sessions_count',
         ]
         read_only_fields = ['id', 'created_at']
         extra_kwargs = {
