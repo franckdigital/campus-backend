@@ -1081,7 +1081,13 @@ class ExamSession(BaseModel):
         if self.score is not None:
             max_score = float(self.exam.max_score or 0)
             if max_score <= 0:
-                return None
+                # SecureExam.max_score defaults to 20 and should never
+                # legitimately be 0 — a 0/missing value here is a data
+                # glitch, not evidence the session is ungraded. Treating it
+                # as "ungraded" would silently hide a real score from every
+                # ranking/average that relies on this method, which is worse
+                # than falling back to the model's own default.
+                max_score = 20.0
             return float(self.score) / max_score * 100
         attempt = self.quiz_attempt
         if attempt and attempt.is_graded:
