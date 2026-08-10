@@ -1185,6 +1185,49 @@ class LibraryDocumentViewSet(viewsets.ModelViewSet):
 # est considéré abandonné (onglet fermé, app tuée, crash) et peut être repris.
 DEVICE_LOCK_STALE_SECONDS = 60
 
+# Cross-filière ranking cohorts for class_ranking — mirrors how this school
+# actually schedules and juries its evaluations: several filières of the same
+# niveau often sit a shared "programme d'évaluation" and are ranked together
+# as one jury (e.g. the Licence 3 MM/MC/MQ/MOGP/AD/GRH/AGE cohort shares one
+# weekly exam schedule across subjects/teachers), while others are juried on
+# their own even within the same niveau (Finance/Comptabilité, Logistique).
+# Not derivable from any existing field, so it's spelled out here explicitly.
+#
+# ASSUMES Program.code holds these exact school abbreviations (MM, MC, MQ,
+# MOGP, AD, GRH, AGE, RIT, GL) — verify against production data and adjust
+# this map if the actual codes differ.
+LICENCE3_MERGED_COHORT = 'Licence 3 — MM / MC / MQ / MOGP / AD / GRH / AGE'
+LICENCE3_INFO_COHORT = 'Licence 3 — RIT / GL'
+LICENCE3_COHORT_CODES = {
+    'MM': LICENCE3_MERGED_COHORT, 'MC': LICENCE3_MERGED_COHORT,
+    'MQ': LICENCE3_MERGED_COHORT, 'MOGP': LICENCE3_MERGED_COHORT,
+    'AD': LICENCE3_MERGED_COHORT, 'GRH': LICENCE3_MERGED_COHORT,
+    'AGE': LICENCE3_MERGED_COHORT,
+    'RIT': LICENCE3_INFO_COHORT, 'GL': LICENCE3_INFO_COHORT,
+}
+
+
+def _ranking_cohort(class_obj):
+    """(cohort_key, cohort_label) for one class's ranking — see
+    LICENCE3_COHORT_CODES above. Every Master 1 filière is auto-merged into
+    one cohort by level name alone (open-ended: a new Master 1 filière joins
+    automatically, no code-list update needed). Anything not explicitly
+    listed falls back to one cohort per filière (e.g. Finance/Comptabilité,
+    Logistique), matching the pre-cohort behaviour.
+    """
+    level = class_obj.level
+    program = level.program if level and level.program_id else None
+    level_name = (level.name or '').strip().upper() if level else ''
+    if 'MASTER 1' in level_name or level_name in ('M1', 'MASTER1'):
+        return ('master1', 'Master 1 — toutes filières')
+    code = (program.code or '').strip().upper() if program else ''
+    merged = LICENCE3_COHORT_CODES.get(code)
+    if merged:
+        return (f'licence3:{merged}', merged)
+    program_name = program.name if program else ''
+    label = f"{level.name} — {program_name}" if level and level.name else (program_name or 'Sans filière')
+    return (f'program:{program.id if program else code}', label)
+
 
 class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
     queryset = SecureExam.objects.select_related('class_obj', 'subject', 'quiz', 'site').all()
@@ -1626,36 +1669,29 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='class-ranking')
     def class_ranking(self, request):
-        """Teacher/admin classement des CLASSES, groupé par filière (classes
-        de deux filières différentes jamais mélangées dans un même rang —
-        aussi peu de sens que de comparer deux matières, même principe qu'un
-        rang jamais mélangé entre examens dans ranking_overview). `filiere`
-        est un filtre OPTIONNEL : sans lui, la réponse couvre TOUTES les
-        filières ayant des données (un bloc par filière, chacun classé
-        indépendamment) — on n'oblige pas l'admin à deviner quelle filière a
-        déjà des copies corrigées avant de voir quoi que ce soit; le filtre
-        ne sert qu'à réduire ensuite l'affichage à une filière précise.
+        """Teacher/admin classement des ÉTUDIANTS, groupé par cohorte de
+        jury (voir _ranking_cohort / LICENCE3_COHORT_CODES ci-dessus) — un
+        même tableau peut donc mélanger plusieurs filières quand l'école les
+        jurie ensemble (ex: Licence 3 MM/MC/MQ/MOGP/AD/GRH/AGE), avec la
+        filière et la classe de chaque étudiant en colonnes pour les
+        distinguer, tandis que d'autres filières restent seules dans leur
+        propre tableau (Finance/Comptabilité, Logistique...) — jamais de
+        mélange arbitraire, seulement celui que l'école jurie réellement
+        ensemble. `filiere` est un filtre OPTIONNEL : sans lui, la réponse
+        couvre TOUTES les cohortes ayant des données — on n'oblige pas
+        l'admin à deviner laquelle a déjà des copies corrigées avant de voir
+        quoi que ce soit; le filtre ne sert qu'à réduire ensuite l'affichage.
 
-        Au sein de chaque filière, le score de chaque classe est la moyenne
-        de TOUS les pourcentages individuels obtenus par ses étudiants sur
-        tous les examens sécurisés corrigés de cette classe (tous sujets
-        confondus, sauf filtre `subject`/`class_obj` — déjà appliqués
-        automatiquement par filter_queryset via filterset_fields) — pas une
-        moyenne des moyennes d'examen, pour qu'un examen avec davantage de
-        copies corrigées pèse proportionnellement plus dans le score final.
-
-        Les lignes sont construites à partir des examens eux-mêmes plutôt que
-        d'une requête Class séparée (croisée ensuite par id) — une classe
-        rendue inactive après coup (is_active=False) sortait silencieusement
-        du classement même si ses examens passés restaient bien là.
-
-        Chaque classe embarque aussi le détail par étudiant (`students`) :
-        sa note dans chaque matière (`notes`, sur 20), sa moyenne PONDÉRÉE
-        par le coefficient de chaque examen (SecureExam.coefficient — un
-        examen à fort coefficient pèse plus dans la moyenne qu'un examen
-        mineur, pas juste une moyenne simple des matières) et son rang au
-        sein de sa classe. `subjects` liste les matières effectivement notées
-        dans la classe, pour construire les colonnes du tableau côté client.
+        Le score de chaque étudiant est sa moyenne PONDÉRÉE par le
+        coefficient de chaque examen (SecureExam.coefficient — un examen à
+        fort coefficient pèse plus qu'un examen mineur, pas une moyenne
+        simple des matières), sur tous les examens sécurisés corrigés dont
+        il/elle a une session (tous sujets confondus, sauf filtre
+        `subject`/`class_obj` — déjà appliqués automatiquement par
+        filter_queryset via filterset_fields). `subjects` liste les matières
+        effectivement notées dans la cohorte, pour construire les colonnes
+        du tableau côté client ; `notes` donne la note de l'étudiant (sur
+        20) dans chacune.
         """
         program_id = request.query_params.get('filiere')
 
@@ -1666,31 +1702,31 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             exam_qs = exam_qs.filter(class_obj__level__program_id=program_id)
         exam_qs = exam_qs.select_related('class_obj__level__program', 'subject')
 
-        # Every accumulator is keyed by (program_id, class_id) so classes
-        # from different filières never collide, and so results.sort()ing
-        # per filière below stays a simple groupby over this one pass.
-        percents_by_class = defaultdict(list)
-        class_names = {}
-        program_names = {}
-        subjects_by_class = defaultdict(set)
-        students_by_class = defaultdict(dict)
+        subjects_by_cohort = defaultdict(set)
+        cohort_labels = {}
+        # cohort_key -> student_id -> accumulator (weighted sum/total for the
+        # coefficient-weighted average, raw percents per subject to average
+        # into a display note if the same subject has >1 exam, plus the
+        # student's own filière/classe since a cohort can span several).
+        students_by_cohort = defaultdict(dict)
 
         for exam in exam_qs:
-            level = exam.class_obj.level
+            class_obj = exam.class_obj
+            level = class_obj.level
             if not level or not level.program_id:
                 continue
-            key = (level.program_id, exam.class_obj_id)
-            class_names[key] = exam.class_obj.name
-            program_names[level.program_id] = level.program.name
+            cohort_key, cohort_label = _ranking_cohort(class_obj)
+            cohort_labels[cohort_key] = cohort_label
             subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
             coefficient = float(exam.coefficient or 1)
             for session, percent in self._rank_sessions(exam):
-                percents_by_class[key].append(percent)
-                subjects_by_class[key].add(subject_name)
-                student = students_by_class[key].setdefault(session.student_id, {
+                subjects_by_cohort[cohort_key].add(subject_name)
+                student = students_by_cohort[cohort_key].setdefault(session.student_id, {
                     'last_name': session.student.user.last_name,
                     'first_name': session.student.user.first_name,
                     'matricule': session.student.matricule,
+                    'filiere_code': level.program.code or '',
+                    'class_name': class_obj.name,
                     'weighted_sum': 0.0,
                     'weight_total': 0.0,
                     'raw_notes': defaultdict(list),
@@ -1699,14 +1735,10 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 student['weight_total'] += coefficient
                 student['raw_notes'][subject_name].append(percent)
 
-        classes_by_program = defaultdict(list)
-        for (pid, class_id), percents in percents_by_class.items():
-            if not percents:
-                continue
-            average_percent = sum(percents) / len(percents)
-
+        cohorts = []
+        for cohort_key, students_acc in students_by_cohort.items():
             students = []
-            for acc in students_by_class[(pid, class_id)].values():
+            for acc in students_acc.values():
                 if acc['weight_total'] <= 0:
                     continue
                 weighted_percent = acc['weighted_sum'] / acc['weight_total']
@@ -1714,6 +1746,8 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                     'last_name': acc['last_name'],
                     'first_name': acc['first_name'],
                     'matricule': acc['matricule'],
+                    'filiere_code': acc['filiere_code'],
+                    'class_name': acc['class_name'],
                     'notes': {
                         subj: round(sum(vals) / len(vals) / 100 * 20, 2)
                         for subj, vals in acc['raw_notes'].items()
@@ -1721,37 +1755,28 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                     'weighted_average': round(weighted_percent / 100 * 20, 2),
                     '_sort': weighted_percent,
                 })
+            if not students:
+                continue
             students.sort(key=lambda s: -s['_sort'])
             for rank, s in enumerate(students, 1):
                 s['rank'] = rank
                 del s['_sort']
 
-            classes_by_program[pid].append({
-                'class_id': class_id,
-                'class_name': class_names.get((pid, class_id), ''),
-                'average_percent': round(average_percent, 2),
-                # A /20 equivalent alongside the raw percent — the familiar
-                # francophone grading scale (also SecureExam.max_score's own
-                # default), easier to read at a glance than a bare percent.
-                'average_score': round(average_percent / 100 * 20, 2),
-                'graded_count': len(percents),
-                'subjects': sorted(subjects_by_class[(pid, class_id)]),
+            cohorts.append({
+                'cohort_key': cohort_key,
+                'cohort_name': cohort_labels.get(cohort_key, ''),
+                'subjects': sorted(subjects_by_cohort[cohort_key]),
                 'students': students,
+                # A /20 equivalent — the familiar francophone grading scale
+                # (also SecureExam.max_score's own default) — averaged from
+                # the students' own weighted averages, purely for a
+                # cohort-level at-a-glance summary in the header.
+                'average_score': round(sum(s['weighted_average'] for s in students) / len(students), 2),
+                'student_count': len(students),
             })
+        cohorts.sort(key=lambda c: c['cohort_name'] or '')
 
-        filieres = []
-        for pid, class_rows in classes_by_program.items():
-            class_rows.sort(key=lambda r: -r['average_percent'])
-            for rank, row in enumerate(class_rows, 1):
-                row['rank'] = rank
-            filieres.append({
-                'filiere_id': pid,
-                'filiere_name': program_names.get(pid, ''),
-                'classes': class_rows,
-            })
-        filieres.sort(key=lambda f: f['filiere_name'] or '')
-
-        return Response({'filieres': filieres})
+        return Response({'cohorts': cohorts})
 
     @action(detail=False, methods=['get'], url_path='classes-for-filiere')
     def classes_for_filiere(self, request):
