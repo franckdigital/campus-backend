@@ -1269,6 +1269,22 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             # restrict_to_selected_students is set) the entire audience.
             scope |= Q(students=student)
             qs = qs.filter(scope).distinct()
+        # Lets ExamCorrectionList show, on every collapsed exam card, how
+        # many sessions are still ungraded without having to open each card
+        # first — with one SecureExam row per (classe, matière, normale/
+        # rattrapage) combo, the same matière name can appear as dozens of
+        # near-identical cards, and finding the handful that actually have
+        # something to correct meant opening every single one. "Graded"
+        # mirrors ExamSession.resolve_percent(): a manual score, or a
+        # QuizAttempt already marked is_graded.
+        qs = qs.annotate(
+            sessions_count=Count('sessions', distinct=True),
+            graded_sessions_count=Count(
+                'sessions',
+                filter=Q(sessions__score__isnull=False) | Q(sessions__quiz_attempt__is_graded=True),
+                distinct=True,
+            ),
+        )
         return qs
 
     def perform_create(self, serializer):
