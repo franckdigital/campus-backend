@@ -1688,10 +1688,13 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         simple des matières), sur tous les examens sécurisés corrigés dont
         il/elle a une session (tous sujets confondus, sauf filtre
         `subject`/`class_obj` — déjà appliqués automatiquement par
-        filter_queryset via filterset_fields). `subjects` liste les matières
-        effectivement notées dans la cohorte, pour construire les colonnes
-        du tableau côté client ; `notes` donne la note de l'étudiant (sur
-        20) dans chacune.
+        filter_queryset via filterset_fields). `subjects` liste TOUTES les
+        matières programmées (un examen publié existe) dans la cohorte —
+        corrigées ou non — pour construire les colonnes du tableau côté
+        client ; une matière pas encore corrigée reste une colonne (case
+        vide pour tout le monde) plutôt que de disparaître, pour que l'admin
+        voie d'un coup d'œil ce qu'il reste à corriger. `notes` donne la
+        note de l'étudiant (sur 20) dans chaque matière déjà corrigée.
 
         Une matière NOTÉE POUR AU MOINS UN AUTRE ÉTUDIANT DE SA CLASSE mais
         absente chez cet étudiant compte pour 0 dans sa moyenne pondérée
@@ -1733,11 +1736,17 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             cohort_labels[cohort_key] = cohort_label
             subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
             coefficient = float(exam.coefficient or 1)
+            # Always a column, whether or not anyone's been graded yet — the
+            # column shows blank/"—" for a still-uncorrected subject rather
+            # than hiding it, so the admin can see at a glance what's left
+            # to correct. The weighted-average denominator below is a
+            # SEPARATE, stricter set (only subjects actually graded for
+            # someone in the class — see class_subject_coef).
+            subjects_by_cohort[cohort_key].add(subject_name)
             graded = self._rank_sessions(exam)
             if graded:
                 class_subject_coef[class_obj.id][subject_name] = coefficient
             for session, percent in graded:
-                subjects_by_cohort[cohort_key].add(subject_name)
                 student = students_by_cohort[cohort_key].setdefault(session.student_id, {
                     'last_name': session.student.user.last_name,
                     'first_name': session.student.user.first_name,
