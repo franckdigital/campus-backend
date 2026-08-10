@@ -1643,6 +1643,14 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         d'une requête Class séparée (croisée ensuite par id) — une classe
         rendue inactive après coup (is_active=False) sortait silencieusement
         du classement même si ses examens passés restaient bien là.
+
+        Chaque classe embarque aussi le détail par étudiant (`students`) :
+        sa note dans chaque matière (`notes`, sur 20), sa moyenne PONDÉRÉE
+        par le coefficient de chaque examen (SecureExam.coefficient — un
+        examen à fort coefficient pèse plus dans la moyenne qu'un examen
+        mineur, pas juste une moyenne simple des matières) et son rang au
+        sein de sa classe. `subjects` liste les matières effectivement notées
+        dans la classe, pour construire les colonnes du tableau côté client.
         """
         program_id = request.query_params.get('filiere')
         if not program_id:
@@ -1653,22 +1661,65 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
 
         exam_qs = self.filter_queryset(self.get_queryset()).filter(
             is_published=True, class_obj__level__program_id=program_id
-        ).select_related('class_obj')
+        ).select_related('class_obj', 'subject')
 
         percents_by_class = defaultdict(list)
         class_names = {}
+        subjects_by_class = defaultdict(set)
+        # class_id -> student_id -> accumulator dict (weighted sum/total for
+        # the coefficient-weighted average, and raw percents per subject to
+        # average into a display note if the same subject has >1 exam).
+        students_by_class = defaultdict(dict)
+
         for exam in exam_qs:
             if not exam.class_obj_id:
                 continue
-            class_names[exam.class_obj_id] = exam.class_obj.name
-            for _, percent in self._rank_sessions(exam):
-                percents_by_class[exam.class_obj_id].append(percent)
+            cid = exam.class_obj_id
+            class_names[cid] = exam.class_obj.name
+            subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
+            coefficient = float(exam.coefficient or 1)
+            for session, percent in self._rank_sessions(exam):
+                percents_by_class[cid].append(percent)
+                subjects_by_class[cid].add(subject_name)
+                student = students_by_class[cid].setdefault(session.student_id, {
+                    'last_name': session.student.user.last_name,
+                    'first_name': session.student.user.first_name,
+                    'matricule': session.student.matricule,
+                    'weighted_sum': 0.0,
+                    'weight_total': 0.0,
+                    'raw_notes': defaultdict(list),
+                })
+                student['weighted_sum'] += percent * coefficient
+                student['weight_total'] += coefficient
+                student['raw_notes'][subject_name].append(percent)
 
         rows = []
         for class_id, percents in percents_by_class.items():
             if not percents:
                 continue
             average_percent = sum(percents) / len(percents)
+
+            students = []
+            for acc in students_by_class[class_id].values():
+                if acc['weight_total'] <= 0:
+                    continue
+                weighted_percent = acc['weighted_sum'] / acc['weight_total']
+                students.append({
+                    'last_name': acc['last_name'],
+                    'first_name': acc['first_name'],
+                    'matricule': acc['matricule'],
+                    'notes': {
+                        subj: round(sum(vals) / len(vals) / 100 * 20, 2)
+                        for subj, vals in acc['raw_notes'].items()
+                    },
+                    'weighted_average': round(weighted_percent / 100 * 20, 2),
+                    '_sort': weighted_percent,
+                })
+            students.sort(key=lambda s: -s['_sort'])
+            for rank, s in enumerate(students, 1):
+                s['rank'] = rank
+                del s['_sort']
+
             rows.append({
                 'class_id': class_id,
                 'class_name': class_names.get(class_id, ''),
@@ -1678,6 +1729,8 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 # default), easier to read at a glance than a bare percent.
                 'average_score': round(average_percent / 100 * 20, 2),
                 'graded_count': len(percents),
+                'subjects': sorted(subjects_by_class[class_id]),
+                'students': students,
             })
         rows.sort(key=lambda r: -r['average_percent'])
         for rank, row in enumerate(rows, 1):
