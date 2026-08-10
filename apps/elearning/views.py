@@ -48,7 +48,8 @@ from .serializers import (
     CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
 from .services import ZoomService
-from apps.academic.models import Session
+from apps.academic.models import Session, Enrollment
+from apps.students.models import Student
 
 
 class TeacherScopedContentMixin:
@@ -1463,21 +1464,109 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             graded = self._rank_sessions(exam)
             if not graded:
                 continue
+            max_score = float(exam.max_score or 0)
             groups.append({
                 'exam_id': exam.id,
                 'exam_title': exam.title,
                 'subject_name': exam.subject.name if exam.subject_id else ('Global' if exam.is_global else None),
                 'class_name': exam.class_obj.name if exam.class_obj_id else None,
                 'site_name': exam.site.name if exam.site_id else None,
+                'max_score': max_score,
                 'results': [
                     {
                         'rank': rank,
                         'last_name': s.student.user.last_name,
                         'first_name': s.student.user.first_name,
                         'matricule': s.student.matricule,
+                        # Recomputed from `percent` rather than read off
+                        # `s.score` directly — the quiz-based grading path
+                        # never writes a value onto ExamSession.score (see
+                        # resolve_percent's docstring), so reading it raw
+                        # would silently blank the column for those exams.
+                        'score': round(percent / 100 * max_score, 2),
                         'mention': mention_for_percent(percent),
                     }
                     for rank, (s, percent) in enumerate(graded, 1)
+                ],
+            })
+        return Response({'groups': groups})
+
+    @staticmethod
+    def _expected_students(exam):
+        """Students who were actually eligible to take `exam` — the same
+        scoping logic as get_queryset's student-visibility branch, run in
+        reverse (from exam to its audience instead of from student to their
+        exams), so "absent" only ever means "eligible but never started",
+        never "wasn't even concerned by this exam".
+
+        A `restrict_to_selected_students` exam's audience is exactly its
+        `students` M2M. Otherwise it's every actively-enrolled student in
+        `class_obj`, plus any individually-added `students` on top (mirrors
+        SecureExamViewSet.get_queryset's `scope |= Q(students=student)`).
+        An is_global exam with no class_obj has no bounded audience to check
+        attendance against (open to the whole school) — callers skip those.
+        """
+        if exam.restrict_to_selected_students:
+            return exam.students.all()
+        if not exam.class_obj_id:
+            return Student.objects.none()
+        enrolled_ids = Enrollment.objects.filter(
+            class_obj_id=exam.class_obj_id, status='ENROLLED', is_active=True
+        ).values_list('student_id', flat=True)
+        extra_ids = exam.students.values_list('id', flat=True)
+        return Student.objects.filter(Q(id__in=enrolled_ids) | Q(id__in=extra_ids))
+
+    @action(detail=False, methods=['get'], url_path='absences-overview')
+    def absences_overview(self, request):
+        """Teacher/admin view of students who never started a given exam at
+        all (no ExamSession row whatsoever — a partial/abandoned attempt
+        still counts as having "taken part"), one block per exam, filterable
+        by filière/classe/matière/site (via the same filter_queryset as
+        ranking_overview) plus a specific exam and a start_date range.
+        Global exams (no class_obj) have no defined audience and are
+        excluded — see _expected_students.
+        """
+        qs = self.filter_queryset(self.get_queryset()).filter(is_published=True, class_obj__isnull=False)
+        program_id = request.query_params.get('filiere')
+        if program_id:
+            qs = qs.filter(class_obj__level__program_id=program_id)
+        exam_id = request.query_params.get('exam')
+        if exam_id:
+            qs = qs.filter(id=exam_id)
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        if date_from:
+            qs = qs.filter(start_date__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(start_date__date__lte=date_to)
+        qs = qs.select_related('class_obj', 'subject', 'site').order_by('-start_date')
+
+        groups = []
+        for exam in qs:
+            expected = self._expected_students(exam).select_related('user')
+            present_ids = set(ExamSession.objects.filter(exam=exam).values_list('student_id', flat=True))
+            absentees = sorted(
+                (s for s in expected if s.id not in present_ids),
+                key=lambda s: (s.user.last_name or '', s.user.first_name or ''),
+            )
+            if not absentees:
+                continue
+            groups.append({
+                'exam_id': exam.id,
+                'exam_title': exam.title,
+                'exam_date': exam.start_date.isoformat() if exam.start_date else None,
+                'subject_name': exam.subject.name if exam.subject_id else None,
+                'class_name': exam.class_obj.name if exam.class_obj_id else None,
+                'site_name': exam.site.name if exam.site_id else None,
+                'expected_count': expected.count(),
+                'absent_count': len(absentees),
+                'absentees': [
+                    {
+                        'last_name': s.user.last_name,
+                        'first_name': s.user.first_name,
+                        'matricule': s.matricule,
+                    }
+                    for s in absentees
                 ],
             })
         return Response({'groups': groups})
