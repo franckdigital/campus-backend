@@ -49,7 +49,7 @@ from .serializers import (
     CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
 from .services import ZoomService
-from apps.academic.models import Session, Enrollment, Class, Subject
+from apps.academic.models import Session, Enrollment, Subject, Program
 from apps.students.models import Student
 
 
@@ -1633,11 +1633,16 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         ranking_overview). Une filière regroupe plusieurs classes; le score
         de chaque classe est la moyenne de TOUS les pourcentages individuels
         obtenus par ses étudiants sur tous les examens sécurisés corrigés de
-        cette classe (tous sujets confondus, sauf filtre `subject`) — pas une
-        moyenne des moyennes d'examen, pour qu'un examen avec davantage de
-        copies corrigées pèse proportionnellement plus dans le score final.
-        Reuses get_queryset's existing teacher/admin scoping like the other
-        overview actions.
+        cette classe (tous sujets confondus, sauf filtre `subject`/`class_obj`
+        — déjà appliqués automatiquement par filter_queryset via
+        filterset_fields, pas besoin de les re-filtrer ici) — pas une moyenne
+        des moyennes d'examen, pour qu'un examen avec davantage de copies
+        corrigées pèse proportionnellement plus dans le score final.
+
+        Les lignes sont construites à partir des examens eux-mêmes plutôt que
+        d'une requête Class séparée (croisée ensuite par id) — une classe
+        rendue inactive après coup (is_active=False) sortait silencieusement
+        du classement même si ses examens passés restaient bien là.
         """
         program_id = request.query_params.get('filiere')
         if not program_id:
@@ -1646,36 +1651,27 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        classes = Class.objects.filter(
-            level__program_id=program_id, is_active=True
-        ).select_related('level__program')
-        program_name = None
-        for cls in classes:
-            program_name = cls.level.program.name
-            break
-
         exam_qs = self.filter_queryset(self.get_queryset()).filter(
             is_published=True, class_obj__level__program_id=program_id
-        )
-        subject_id = request.query_params.get('subject')
-        if subject_id:
-            exam_qs = exam_qs.filter(subject_id=subject_id)
-        exam_qs = exam_qs.select_related('class_obj')
+        ).select_related('class_obj')
 
         percents_by_class = defaultdict(list)
+        class_names = {}
         for exam in exam_qs:
+            if not exam.class_obj_id:
+                continue
+            class_names[exam.class_obj_id] = exam.class_obj.name
             for _, percent in self._rank_sessions(exam):
                 percents_by_class[exam.class_obj_id].append(percent)
 
         rows = []
-        for cls in classes:
-            percents = percents_by_class.get(cls.id, [])
+        for class_id, percents in percents_by_class.items():
             if not percents:
                 continue
             average_percent = sum(percents) / len(percents)
             rows.append({
-                'class_id': cls.id,
-                'class_name': cls.name,
+                'class_id': class_id,
+                'class_name': class_names.get(class_id, ''),
                 'average_percent': round(average_percent, 2),
                 # A /20 equivalent alongside the raw percent — the familiar
                 # francophone grading scale (also SecureExam.max_score's own
@@ -1687,7 +1683,30 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         for rank, row in enumerate(rows, 1):
             row['rank'] = rank
 
-        return Response({'filiere_name': program_name, 'classes': rows})
+        program = Program.objects.filter(id=program_id).first()
+        return Response({'filiere_name': program.name if program else None, 'classes': rows})
+
+    @action(detail=False, methods=['get'], url_path='classes-for-filiere')
+    def classes_for_filiere(self, request):
+        """Classes ayant au moins un examen sécurisé publié dans une filière
+        donnée — alimente le filtre classe de class-ranking, même principe
+        que subjects-for-filiere : ne proposer que des choix qui renverront
+        effectivement des données.
+        """
+        program_id = request.query_params.get('filiere')
+        if not program_id:
+            return Response({'classes': []})
+        exam_qs = self.filter_queryset(self.get_queryset()).filter(
+            is_published=True, class_obj__level__program_id=program_id, class_obj__isnull=False
+        ).select_related('class_obj')
+        seen = {}
+        for exam in exam_qs:
+            seen[exam.class_obj_id] = exam.class_obj.name
+        classes = sorted(
+            ({'id': cid, 'name': name} for cid, name in seen.items()),
+            key=lambda c: c['name'] or '',
+        )
+        return Response({'classes': classes})
 
     @action(detail=False, methods=['get'], url_path='subjects-for-filiere')
     def subjects_for_filiere(self, request):
