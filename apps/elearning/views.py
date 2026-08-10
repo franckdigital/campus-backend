@@ -49,7 +49,7 @@ from .serializers import (
     CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
 from .services import ZoomService
-from apps.academic.models import Session, Enrollment, Class
+from apps.academic.models import Session, Enrollment, Class, Subject
 from apps.students.models import Student
 
 
@@ -1688,6 +1688,24 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             row['rank'] = rank
 
         return Response({'filiere_name': program_name, 'classes': rows})
+
+    @action(detail=False, methods=['get'], url_path='subjects-for-filiere')
+    def subjects_for_filiere(self, request):
+        """Matières effectivement programmées (au moins un examen sécurisé
+        publié) pour une filière donnée — alimente le filtre matière de
+        class-ranking pour qu'il ne propose jamais une matière absente de
+        cette filière. Sans ça, choisir une matière non enseignée dans la
+        filière renvoie toujours un classement vide, ce qui se lit à tort
+        comme "le filtre est cassé" plutôt que comme un choix incohérent.
+        """
+        program_id = request.query_params.get('filiere')
+        if not program_id:
+            return Response({'subjects': []})
+        subject_ids = self.filter_queryset(self.get_queryset()).filter(
+            is_published=True, class_obj__level__program_id=program_id, subject__isnull=False
+        ).values_list('subject_id', flat=True).distinct()
+        subjects = Subject.objects.filter(id__in=subject_ids).order_by('name')
+        return Response({'subjects': [{'id': s.id, 'name': s.name} for s in subjects]})
 
     @action(detail=True, methods=['get'], url_path='my-session')
     def my_session(self, request, pk=None):
