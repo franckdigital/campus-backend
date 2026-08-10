@@ -49,7 +49,7 @@ from .serializers import (
     CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
 from .services import ZoomService
-from apps.academic.models import Session, Enrollment, Subject, Program
+from apps.academic.models import Session, Enrollment, Subject
 from apps.students.models import Student
 
 
@@ -1626,18 +1626,23 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='class-ranking')
     def class_ranking(self, request):
-        """Teacher/admin classement des CLASSES au sein d'une filière donnée
-        (`filiere` obligatoire — comparer les classes de deux filières
-        différentes n'aurait pas plus de sens que de comparer deux matières,
-        d'où le même principe qu'un rang jamais mélangé entre examens dans
-        ranking_overview). Une filière regroupe plusieurs classes; le score
-        de chaque classe est la moyenne de TOUS les pourcentages individuels
-        obtenus par ses étudiants sur tous les examens sécurisés corrigés de
-        cette classe (tous sujets confondus, sauf filtre `subject`/`class_obj`
-        — déjà appliqués automatiquement par filter_queryset via
-        filterset_fields, pas besoin de les re-filtrer ici) — pas une moyenne
-        des moyennes d'examen, pour qu'un examen avec davantage de copies
-        corrigées pèse proportionnellement plus dans le score final.
+        """Teacher/admin classement des CLASSES, groupé par filière (classes
+        de deux filières différentes jamais mélangées dans un même rang —
+        aussi peu de sens que de comparer deux matières, même principe qu'un
+        rang jamais mélangé entre examens dans ranking_overview). `filiere`
+        est un filtre OPTIONNEL : sans lui, la réponse couvre TOUTES les
+        filières ayant des données (un bloc par filière, chacun classé
+        indépendamment) — on n'oblige pas l'admin à deviner quelle filière a
+        déjà des copies corrigées avant de voir quoi que ce soit; le filtre
+        ne sert qu'à réduire ensuite l'affichage à une filière précise.
+
+        Au sein de chaque filière, le score de chaque classe est la moyenne
+        de TOUS les pourcentages individuels obtenus par ses étudiants sur
+        tous les examens sécurisés corrigés de cette classe (tous sujets
+        confondus, sauf filtre `subject`/`class_obj` — déjà appliqués
+        automatiquement par filter_queryset via filterset_fields) — pas une
+        moyenne des moyennes d'examen, pour qu'un examen avec davantage de
+        copies corrigées pèse proportionnellement plus dans le score final.
 
         Les lignes sont construites à partir des examens eux-mêmes plutôt que
         d'une requête Class séparée (croisée ensuite par id) — une classe
@@ -1653,35 +1658,36 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         dans la classe, pour construire les colonnes du tableau côté client.
         """
         program_id = request.query_params.get('filiere')
-        if not program_id:
-            return Response(
-                {'detail': "Le paramètre 'filiere' est requis."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         exam_qs = self.filter_queryset(self.get_queryset()).filter(
-            is_published=True, class_obj__level__program_id=program_id
-        ).select_related('class_obj', 'subject')
+            is_published=True, class_obj__isnull=False
+        )
+        if program_id:
+            exam_qs = exam_qs.filter(class_obj__level__program_id=program_id)
+        exam_qs = exam_qs.select_related('class_obj__level__program', 'subject')
 
+        # Every accumulator is keyed by (program_id, class_id) so classes
+        # from different filières never collide, and so results.sort()ing
+        # per filière below stays a simple groupby over this one pass.
         percents_by_class = defaultdict(list)
         class_names = {}
+        program_names = {}
         subjects_by_class = defaultdict(set)
-        # class_id -> student_id -> accumulator dict (weighted sum/total for
-        # the coefficient-weighted average, and raw percents per subject to
-        # average into a display note if the same subject has >1 exam).
         students_by_class = defaultdict(dict)
 
         for exam in exam_qs:
-            if not exam.class_obj_id:
+            level = exam.class_obj.level
+            if not level or not level.program_id:
                 continue
-            cid = exam.class_obj_id
-            class_names[cid] = exam.class_obj.name
+            key = (level.program_id, exam.class_obj_id)
+            class_names[key] = exam.class_obj.name
+            program_names[level.program_id] = level.program.name
             subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
             coefficient = float(exam.coefficient or 1)
             for session, percent in self._rank_sessions(exam):
-                percents_by_class[cid].append(percent)
-                subjects_by_class[cid].add(subject_name)
-                student = students_by_class[cid].setdefault(session.student_id, {
+                percents_by_class[key].append(percent)
+                subjects_by_class[key].add(subject_name)
+                student = students_by_class[key].setdefault(session.student_id, {
                     'last_name': session.student.user.last_name,
                     'first_name': session.student.user.first_name,
                     'matricule': session.student.matricule,
@@ -1693,14 +1699,14 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 student['weight_total'] += coefficient
                 student['raw_notes'][subject_name].append(percent)
 
-        rows = []
-        for class_id, percents in percents_by_class.items():
+        classes_by_program = defaultdict(list)
+        for (pid, class_id), percents in percents_by_class.items():
             if not percents:
                 continue
             average_percent = sum(percents) / len(percents)
 
             students = []
-            for acc in students_by_class[class_id].values():
+            for acc in students_by_class[(pid, class_id)].values():
                 if acc['weight_total'] <= 0:
                     continue
                 weighted_percent = acc['weighted_sum'] / acc['weight_total']
@@ -1720,24 +1726,32 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 s['rank'] = rank
                 del s['_sort']
 
-            rows.append({
+            classes_by_program[pid].append({
                 'class_id': class_id,
-                'class_name': class_names.get(class_id, ''),
+                'class_name': class_names.get((pid, class_id), ''),
                 'average_percent': round(average_percent, 2),
                 # A /20 equivalent alongside the raw percent — the familiar
                 # francophone grading scale (also SecureExam.max_score's own
                 # default), easier to read at a glance than a bare percent.
                 'average_score': round(average_percent / 100 * 20, 2),
                 'graded_count': len(percents),
-                'subjects': sorted(subjects_by_class[class_id]),
+                'subjects': sorted(subjects_by_class[(pid, class_id)]),
                 'students': students,
             })
-        rows.sort(key=lambda r: -r['average_percent'])
-        for rank, row in enumerate(rows, 1):
-            row['rank'] = rank
 
-        program = Program.objects.filter(id=program_id).first()
-        return Response({'filiere_name': program.name if program else None, 'classes': rows})
+        filieres = []
+        for pid, class_rows in classes_by_program.items():
+            class_rows.sort(key=lambda r: -r['average_percent'])
+            for rank, row in enumerate(class_rows, 1):
+                row['rank'] = rank
+            filieres.append({
+                'filiere_id': pid,
+                'filiere_name': program_names.get(pid, ''),
+                'classes': class_rows,
+            })
+        filieres.sort(key=lambda f: f['filiere_name'] or '')
+
+        return Response({'filieres': filieres})
 
     @action(detail=False, methods=['get'], url_path='classes-for-filiere')
     def classes_for_filiere(self, request):
