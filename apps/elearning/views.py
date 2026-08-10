@@ -1453,12 +1453,17 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         their own class/subject; admin/staff see the whole school — exactly
         the "classement général" the admin side asked for).
 
-        Also appends the exam's absentees (eligible students with no
-        ExamSession row at all — see _expected_students) at the end of each
-        exam's `results`, with `rank`/`score`/`mention` left null and
-        `status: 'absent'` so a single table can show who ranked where
-        alongside who never showed up, instead of requiring a second lookup
-        against the absences-overview action for the same exam.
+        Also appends, at the end of each exam's `results`:
+        - students who **composed but aren't graded yet** (an ExamSession
+          row exists — started, submitted, or flagged — but resolve_percent()
+          has nothing to rank), with `status: 'present'` and `mention: 'En
+          attente de correction'` — they took the exam and must never read as
+          absent just because grading hasn't happened.
+        - true absentees (eligible students with no ExamSession row at all —
+          see _expected_students), with `status: 'absent'`.
+        `rank`/`score` stay null for both groups. One table therefore shows
+        who ranked where, who's awaiting correction, and who never showed up,
+        instead of requiring a second lookup against absences-overview.
         """
         qs = self.filter_queryset(self.get_queryset()).filter(is_published=True)
         program_id = request.query_params.get('filiere')
@@ -1469,13 +1474,21 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         groups = []
         for exam in qs:
             graded = self._rank_sessions(exam)
+            graded_student_ids = {s.student_id for s, _ in graded}
+            all_sessions = list(
+                ExamSession.objects.filter(exam=exam).select_related('student__user')
+            )
+            present_ids = {sess.student_id for sess in all_sessions}
+            ungraded_present = sorted(
+                (sess for sess in all_sessions if sess.student_id not in graded_student_ids),
+                key=lambda sess: (sess.student.user.last_name or '', sess.student.user.first_name or ''),
+            )
             expected = self._expected_students(exam).select_related('user')
-            present_ids = set(ExamSession.objects.filter(exam=exam).values_list('student_id', flat=True))
             absentees = sorted(
                 (s for s in expected if s.id not in present_ids),
                 key=lambda s: (s.user.last_name or '', s.user.first_name or ''),
             )
-            if not graded and not absentees:
+            if not graded and not ungraded_present and not absentees:
                 continue
             max_score = float(exam.max_score or 0)
             results = [
@@ -1495,6 +1508,18 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 }
                 for rank, (s, percent) in enumerate(graded, 1)
             ]
+            results.extend(
+                {
+                    'rank': None,
+                    'last_name': sess.student.user.last_name,
+                    'first_name': sess.student.user.first_name,
+                    'matricule': sess.student.matricule,
+                    'score': None,
+                    'mention': 'En attente de correction',
+                    'status': 'present',
+                }
+                for sess in ungraded_present
+            )
             results.extend(
                 {
                     'rank': None,
