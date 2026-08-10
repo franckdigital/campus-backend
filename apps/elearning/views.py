@@ -1685,26 +1685,27 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         Le score de chaque étudiant est sa moyenne PONDÉRÉE par le
         coefficient de chaque examen (SecureExam.coefficient — un examen à
         fort coefficient pèse plus qu'un examen mineur, pas une moyenne
-        simple des matières), sur tous les examens sécurisés corrigés dont
-        il/elle a une session (tous sujets confondus, sauf filtre
-        `subject`/`class_obj` — déjà appliqués automatiquement par
-        filter_queryset via filterset_fields). `subjects` liste TOUTES les
+        simple des matières), calculée UNIQUEMENT sur les notes qui existent
+        réellement en base pour cet étudiant — jamais en inventant un 0 pour
+        une matière manquante — et s'ajuste automatiquement dès qu'une
+        nouvelle copie est corrigée, puisque tout est recalculé en direct à
+        chaque appel (rien n'est mis en cache). `subjects` liste TOUTES les
         matières programmées (un examen publié existe) dans la cohorte —
         corrigées ou non — pour construire les colonnes du tableau côté
-        client ; une matière pas encore corrigée reste une colonne (case
-        vide pour tout le monde) plutôt que de disparaître, pour que l'admin
-        voie d'un coup d'œil ce qu'il reste à corriger. `notes` donne la
-        note de l'étudiant (sur 20) dans chaque matière déjà corrigée.
+        client, même si personne n'y a encore de note.
 
-        Une matière NOTÉE POUR AU MOINS UN AUTRE ÉTUDIANT DE SA CLASSE mais
-        absente chez cet étudiant compte pour 0 dans sa moyenne pondérée
-        (au lieu d'être simplement ignorée) — sinon un étudiant avec moins
-        de copies corrigées se retrouvait avec une moyenne calculée sur une
-        base plus restreinte que ses camarades, potentiellement flatteuse
-        par rapport à eux. Une matière que PERSONNE dans la classe n'a
-        encore reçue (correction pas encore faite) ne compte en revanche
-        pour personne, pour ne pas pénaliser toute une classe à cause d'un
-        simple retard de correction.
+        Pour chaque matière, la case d'un étudiant dans `notes` distingue
+        trois états :
+        - noté (`{"value": ..., "graded": true}`) — une vraie note existe ;
+        - en attente (`{"value": null, "graded": false}`) — l'étudiant a
+          composé (une ExamSession existe) mais n'a pas encore été corrigé ;
+        - absent — pas d'entrée du tout dans `notes` pour cette matière —
+          l'étudiant n'a même pas composé (aucune ExamSession), à distinguer
+          côté client d'un "en attente" (ex: tiret rouge vs texte neutre).
+        Seul l'état "noté" alimente la moyenne pondérée ; "en attente" et
+        "absent" en sont tous deux exclus (ni traités comme un 0, ni ignorés
+        silencieusement au point de fausser la comparaison : ils sont
+        simplement absents du calcul tant qu'aucune note n'existe).
         """
         program_id = request.query_params.get('filiere')
 
@@ -1717,14 +1718,11 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
 
         subjects_by_cohort = defaultdict(set)
         cohort_labels = {}
-        # class_id -> subject_name -> coefficient, but only for subjects with
-        # at least one graded session in that class — the denominator for
-        # each of that class's students' weighted average (see docstring).
-        class_subject_coef = defaultdict(dict)
-        # cohort_key -> student_id -> accumulator: raw percents per subject
-        # (averaged into a display note if the same subject has >1 exam),
-        # plus the student's own filière/classe since a cohort can span
-        # several classes/filières.
+        # cohort_key -> student_id -> accumulator: weighted sum/total for the
+        # coefficient-weighted average (graded exams only), raw percents per
+        # subject to average into a display note if the same subject has >1
+        # exam, which subjects are pending (composed but ungraded), plus the
+        # student's own filière/classe since a cohort can span several.
         students_by_cohort = defaultdict(dict)
 
         for exam in exam_qs:
@@ -1737,49 +1735,50 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
             subject_name = exam.subject.name if exam.subject_id else (exam.title or 'Examen')
             coefficient = float(exam.coefficient or 1)
             # Always a column, whether or not anyone's been graded yet — the
-            # column shows blank/"—" for a still-uncorrected subject rather
-            # than hiding it, so the admin can see at a glance what's left
-            # to correct. The weighted-average denominator below is a
-            # SEPARATE, stricter set (only subjects actually graded for
-            # someone in the class — see class_subject_coef).
+            # column shows blank/pending for a still-uncorrected subject
+            # rather than hiding it, so the admin can see at a glance what's
+            # left to correct.
             subjects_by_cohort[cohort_key].add(subject_name)
-            graded = self._rank_sessions(exam)
-            if graded:
-                class_subject_coef[class_obj.id][subject_name] = coefficient
-            for session, percent in graded:
+
+            # Every session regardless of status (not just graded ones, and
+            # not scoped to SUBMITTED/FLAGGED like _rank_sessions) — a
+            # STARTED-but-unfinished session still counts as "composed" for
+            # the pending/absent distinction below.
+            for session in ExamSession.objects.filter(exam=exam).select_related('student__user'):
                 student = students_by_cohort[cohort_key].setdefault(session.student_id, {
                     'last_name': session.student.user.last_name,
                     'first_name': session.student.user.first_name,
                     'matricule': session.student.matricule,
                     'filiere_code': level.program.code or '',
                     'class_name': class_obj.name,
-                    'class_id': class_obj.id,
+                    'weighted_sum': 0.0,
+                    'weight_total': 0.0,
                     'raw_notes': defaultdict(list),
+                    'pending_subjects': set(),
                 })
-                student['raw_notes'][subject_name].append(percent)
+                percent = session.resolve_percent()
+                if percent is not None:
+                    student['weighted_sum'] += percent * coefficient
+                    student['weight_total'] += coefficient
+                    student['raw_notes'][subject_name].append(percent)
+                else:
+                    student['pending_subjects'].add(subject_name)
 
         cohorts = []
         for cohort_key, students_acc in students_by_cohort.items():
             students = []
             for acc in students_acc.values():
-                subject_coefs = class_subject_coef.get(acc['class_id'], {})
-                weighted_sum = 0.0
-                weight_total = 0.0
-                notes = {}
-                for subj, coef in subject_coefs.items():
-                    weight_total += coef
-                    vals = acc['raw_notes'].get(subj)
-                    if vals:
-                        avg_percent = sum(vals) / len(vals)
-                        weighted_sum += avg_percent * coef
-                        notes[subj] = round(avg_percent / 100 * 20, 2)
-                    # else: missing but graded for classmates -> counts as 0
-                    # in weighted_sum (weight_total still includes it), and
-                    # stays absent from `notes` so the cell renders as "—"
-                    # rather than a misleading literal 0.
-                if weight_total <= 0:
-                    continue
-                weighted_percent = weighted_sum / weight_total
+                if acc['weight_total'] <= 0:
+                    continue  # never actually graded in anything -> no row
+                weighted_percent = acc['weighted_sum'] / acc['weight_total']
+                notes = {
+                    subj: {'value': round(sum(vals) / len(vals) / 100 * 20, 2), 'graded': True}
+                    for subj, vals in acc['raw_notes'].items()
+                }
+                for subj in acc['pending_subjects']:
+                    # A graded exam takes priority for display if the same
+                    # subject somehow has both a graded and an ungraded exam.
+                    notes.setdefault(subj, {'value': None, 'graded': False})
                 students.append({
                     'last_name': acc['last_name'],
                     'first_name': acc['first_name'],
