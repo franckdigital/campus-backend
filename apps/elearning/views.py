@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import timedelta
 
 from django.db.models import Q, Count, Avg
@@ -48,7 +49,7 @@ from .serializers import (
     CourseSectionSerializer, CourseChapterSerializer, CourseLessonSerializer,
 )
 from .services import ZoomService
-from apps.academic.models import Session, Enrollment
+from apps.academic.models import Session, Enrollment, Class
 from apps.students.models import Student
 
 
@@ -1622,6 +1623,71 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 ],
             })
         return Response({'groups': groups})
+
+    @action(detail=False, methods=['get'], url_path='class-ranking')
+    def class_ranking(self, request):
+        """Teacher/admin classement des CLASSES au sein d'une filière donnée
+        (`filiere` obligatoire — comparer les classes de deux filières
+        différentes n'aurait pas plus de sens que de comparer deux matières,
+        d'où le même principe qu'un rang jamais mélangé entre examens dans
+        ranking_overview). Une filière regroupe plusieurs classes; le score
+        de chaque classe est la moyenne de TOUS les pourcentages individuels
+        obtenus par ses étudiants sur tous les examens sécurisés corrigés de
+        cette classe (tous sujets confondus, sauf filtre `subject`) — pas une
+        moyenne des moyennes d'examen, pour qu'un examen avec davantage de
+        copies corrigées pèse proportionnellement plus dans le score final.
+        Reuses get_queryset's existing teacher/admin scoping like the other
+        overview actions.
+        """
+        program_id = request.query_params.get('filiere')
+        if not program_id:
+            return Response(
+                {'detail': "Le paramètre 'filiere' est requis."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        classes = Class.objects.filter(
+            level__program_id=program_id, is_active=True
+        ).select_related('level__program')
+        program_name = None
+        for cls in classes:
+            program_name = cls.level.program.name
+            break
+
+        exam_qs = self.filter_queryset(self.get_queryset()).filter(
+            is_published=True, class_obj__level__program_id=program_id
+        )
+        subject_id = request.query_params.get('subject')
+        if subject_id:
+            exam_qs = exam_qs.filter(subject_id=subject_id)
+        exam_qs = exam_qs.select_related('class_obj')
+
+        percents_by_class = defaultdict(list)
+        for exam in exam_qs:
+            for _, percent in self._rank_sessions(exam):
+                percents_by_class[exam.class_obj_id].append(percent)
+
+        rows = []
+        for cls in classes:
+            percents = percents_by_class.get(cls.id, [])
+            if not percents:
+                continue
+            average_percent = sum(percents) / len(percents)
+            rows.append({
+                'class_id': cls.id,
+                'class_name': cls.name,
+                'average_percent': round(average_percent, 2),
+                # A /20 equivalent alongside the raw percent — the familiar
+                # francophone grading scale (also SecureExam.max_score's own
+                # default), easier to read at a glance than a bare percent.
+                'average_score': round(average_percent / 100 * 20, 2),
+                'graded_count': len(percents),
+            })
+        rows.sort(key=lambda r: -r['average_percent'])
+        for rank, row in enumerate(rows, 1):
+            row['rank'] = rank
+
+        return Response({'filiere_name': program_name, 'classes': rows})
 
     @action(detail=True, methods=['get'], url_path='my-session')
     def my_session(self, request, pk=None):
