@@ -1452,6 +1452,13 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         existing scoping (TeacherScopedContentMixin restricts teachers to
         their own class/subject; admin/staff see the whole school — exactly
         the "classement général" the admin side asked for).
+
+        Also appends the exam's absentees (eligible students with no
+        ExamSession row at all — see _expected_students) at the end of each
+        exam's `results`, with `rank`/`score`/`mention` left null and
+        `status: 'absent'` so a single table can show who ranked where
+        alongside who never showed up, instead of requiring a second lookup
+        against the absences-overview action for the same exam.
         """
         qs = self.filter_queryset(self.get_queryset()).filter(is_published=True)
         program_id = request.query_params.get('filiere')
@@ -1462,9 +1469,44 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
         groups = []
         for exam in qs:
             graded = self._rank_sessions(exam)
-            if not graded:
+            expected = self._expected_students(exam).select_related('user')
+            present_ids = set(ExamSession.objects.filter(exam=exam).values_list('student_id', flat=True))
+            absentees = sorted(
+                (s for s in expected if s.id not in present_ids),
+                key=lambda s: (s.user.last_name or '', s.user.first_name or ''),
+            )
+            if not graded and not absentees:
                 continue
             max_score = float(exam.max_score or 0)
+            results = [
+                {
+                    'rank': rank,
+                    'last_name': s.student.user.last_name,
+                    'first_name': s.student.user.first_name,
+                    'matricule': s.student.matricule,
+                    # Recomputed from `percent` rather than read off
+                    # `s.score` directly — the quiz-based grading path
+                    # never writes a value onto ExamSession.score (see
+                    # resolve_percent's docstring), so reading it raw
+                    # would silently blank the column for those exams.
+                    'score': round(percent / 100 * max_score, 2),
+                    'mention': mention_for_percent(percent),
+                    'status': 'present',
+                }
+                for rank, (s, percent) in enumerate(graded, 1)
+            ]
+            results.extend(
+                {
+                    'rank': None,
+                    'last_name': s.user.last_name,
+                    'first_name': s.user.first_name,
+                    'matricule': s.matricule,
+                    'score': None,
+                    'mention': None,
+                    'status': 'absent',
+                }
+                for s in absentees
+            )
             groups.append({
                 'exam_id': exam.id,
                 'exam_title': exam.title,
@@ -1472,22 +1514,7 @@ class SecureExamViewSet(TeacherScopedContentMixin, viewsets.ModelViewSet):
                 'class_name': exam.class_obj.name if exam.class_obj_id else None,
                 'site_name': exam.site.name if exam.site_id else None,
                 'max_score': max_score,
-                'results': [
-                    {
-                        'rank': rank,
-                        'last_name': s.student.user.last_name,
-                        'first_name': s.student.user.first_name,
-                        'matricule': s.student.matricule,
-                        # Recomputed from `percent` rather than read off
-                        # `s.score` directly — the quiz-based grading path
-                        # never writes a value onto ExamSession.score (see
-                        # resolve_percent's docstring), so reading it raw
-                        # would silently blank the column for those exams.
-                        'score': round(percent / 100 * max_score, 2),
-                        'mention': mention_for_percent(percent),
-                    }
-                    for rank, (s, percent) in enumerate(graded, 1)
-                ],
+                'results': results,
             })
         return Response({'groups': groups})
 
