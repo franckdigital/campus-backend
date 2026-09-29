@@ -301,13 +301,24 @@ class Command(BaseCommand):
         from apps.staff.models import StaffProfile
         from apps.accounts.models import User, UserRole, UserSite
         from apps.core.models import AuditLog, SystemConfig, AcademicYear
+        from apps.payments.models import CinetPayTransaction
+        from apps.accounting.models import JournalLine, JournalEntry
 
+        # CinetPayTransaction.invoice est on_delete=PROTECT (apps/payments/models.py) —
+        # absent de cette liste, une seule ligne suffit a faire echouer silencieusement
+        # Invoice.objects.all().delete() (cf. le try/except plus bas), qui bloque en
+        # cascade la suppression de Student puis de User : le --reset devenait alors un
+        # no-op sur toutes les donnees financieres/etudiants sans jamais le signaler
+        # clairement, laissant les anciennes factures dupliquees en base d'un run a
+        # l'autre. JournalLine/JournalEntry (apps.accounting) sont nettoyes par prudence
+        # avant Payment/Invoice meme s'ils sont normalement SET_NULL, pas PROTECT.
         order = [
             ExamSession, SecureExam, AssignmentCorrection, AssignmentSubmission, Assignment,
             AttemptAnswer, QuizAttempt, Choice, Question, Quiz, LessonProgress,
             LessonAttachment, Lesson, Chapter,
             AttendanceRecord, AbsenceRequest, AttendanceSession,
             Grade, ReportCard, Evaluation, GradeCategory,
+            CinetPayTransaction, JournalLine, JournalEntry,
             CashTransaction, CashSession, Payment, InvoiceItem, Invoice,
             Expense, CashRegister, BankAccount, PaymentMethod, FeeType,
             FeeInstallment, FeeConfiguration,
@@ -317,6 +328,7 @@ class Command(BaseCommand):
             UserRole, UserSite, User,
             AuditLog, SystemConfig, AcademicYear,
         ]
+        failures = []
         for model in order:
             try:
                 n = model.objects.count()
@@ -324,7 +336,16 @@ class Command(BaseCommand):
                 if n:
                     print(f'  Supprime {n:>4}  {model.__name__}')
             except Exception as e:
-                print(f'  [WARN] {model.__name__}: {e}')
+                print(f'  [ECHEC] {model.__name__}: {e}')
+                failures.append(model.__name__)
+
+        if failures:
+            raise RuntimeError(
+                'Le nettoyage a echoue pour : ' + ', '.join(failures) +
+                ' — des donnees residuelles subsistent, le seed serait corrompu '
+                '(factures dupliquees, etudiants existants reutilises). Corrigez la '
+                'cause (FK PROTECT non geree) avant de relancer.'
+            )
 
     # =========================================================================
     # DONNEES PARTAGEES
