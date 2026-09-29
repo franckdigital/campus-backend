@@ -57,7 +57,7 @@ def split_rows_reverse(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('finance', '0011_feeconfiguration_add_category_fields'),
+        ('finance', '0011b_fix_fee_configuration_collation_dynamic'),
     ]
 
     operations = [
