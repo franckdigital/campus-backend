@@ -11,18 +11,23 @@ from apps.finance.models import Payment, PaymentMethod
 
 
 def _normalize_ci_phone(phone):
-    """Strip formatting (spaces, +, country code) down to CinetPay's expected
-    local format: a bare 10-digit number starting with 0 (Côte d'Ivoire moved
-    to 10-digit mobile numbers in 2021 — 8-digit legacy-format numbers, or
-    numbers with spaces/the +225 prefix left in, get rejected by CinetPay
-    with "client phone number is not mobile" even though they display fine
-    everywhere else in the app)."""
+    """CinetPay's v1 "Aurora" API expects client_phone_number in FULL
+    international format WITH the +225 country code AND the local trunk '0'
+    kept (e.g. +2250707070700 — per CinetPay's own notify_url webhook
+    payload example and sandbox test-number docs), not the bare local
+    10-digit number the old v2 API wanted. Sending the stripped local form
+    (no +225) gets even CinetPay's own documented SUCCESS test number
+    rejected with "client phone number is not mobile" — confirmed against a
+    real sandbox account in apps/payments (managers-backend project), same
+    CinetPay v1 integration as this one."""
     digits = re.sub(r'\D', '', phone or '')
-    if digits.startswith('225') and len(digits) > 10:
-        digits = digits[3:]
-    if digits and not digits.startswith('0'):
-        digits = '0' + digits
-    return digits
+    if digits.startswith('225'):
+        local = digits[3:]
+    else:
+        local = digits
+    if len(local) == 9 and not local.startswith('0'):
+        local = '0' + local
+    return f'+225{local}'
 
 
 class CinetPayService:
