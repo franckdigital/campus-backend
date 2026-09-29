@@ -120,6 +120,36 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice = self.get_object()
         serializer = InvoiceItemSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        # Refuse a 2nd SCOLARITE item for a student who already has one on a
+        # DIFFERENT active, unsettled invoice — every "create a scolarité
+        # invoice" entry point in the admin UI (there are several: the
+        # header "Nouvelle facture" button has no visibility guard of its
+        # own, unlike the conditional "Créer & Payer" one) funnels through
+        # this single endpoint, so this is the one place that can actually
+        # stop a duplicate regardless of which button triggered it. Mirrors
+        # ensure_student_invoices' own existing-invoice check (exclude
+        # PAID/CANCELLED) so the two never disagree on what counts as
+        # "already has one" — without this, each duplicate blindly summed
+        # into the student's displayed total (e.g. 650 000 -> 1 300 000).
+        fee_type_id = request.data.get('fee_type')
+        if fee_type_id:
+            fee_type = FeeType.objects.filter(pk=fee_type_id).first()
+            if fee_type and (fee_type.code or '').upper() == 'SCOLARITE':
+                duplicate = Invoice.objects.filter(
+                    student=invoice.student, items__fee_type=fee_type, is_active=True,
+                ).exclude(pk=invoice.pk).exclude(status__in=['PAID', 'CANCELLED']).first()
+                if duplicate:
+                    return Response(
+                        {'detail': (
+                            f"Cet étudiant a déjà une facture de scolarité active et non soldée "
+                            f"({duplicate.invoice_number}, solde restant {duplicate.balance} FCFA). "
+                            f"Utilisez « Nouveau paiement » / « Payer un acompte » sur cette facture "
+                            f"au lieu d'en créer une nouvelle."
+                        )},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
         item = serializer.save(invoice=invoice)
         invoice.refresh_from_db()  # Refresh to get updated items relation
         invoice.save()  # This will trigger calculate_totals with the new item
