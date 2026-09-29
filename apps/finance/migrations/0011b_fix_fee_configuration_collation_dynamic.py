@@ -11,6 +11,14 @@
 # already-existing, never-explicitly-overridden table (`sites`) actually has and
 # converts fee_configurations (and fee_installments, added the same way by
 # 0010) to match it — instead of guessing a fixed value.
+#
+# fee_installments.fee_configuration_id has a live FK constraint onto
+# fee_configurations(id) (added by 0010). MySQL validates FK column
+# compatibility on ANY ALTER touching either side of that constraint, so
+# converting fee_configurations alone immediately fails with error 3780
+# ("Referencing column ... incompatible") the moment fee_installments still
+# disagrees — the FK has to be dropped first, both tables converted, then the
+# FK recreated.
 from django.db import migrations
 
 
@@ -22,6 +30,19 @@ def fix_collation(apps, schema_editor):
         )
         row = cursor.fetchone()
         target_collation = row[0] if row else 'utf8mb4_0900_ai_ci'
+
+        # Find the FK constraint name dynamically instead of hardcoding
+        # Django's auto-generated one, in case it ever differs.
+        cursor.execute(
+            "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fee_installments' "
+            "AND REFERENCED_TABLE_NAME = 'fee_configurations'"
+        )
+        fk_row = cursor.fetchone()
+        fk_name = fk_row[0] if fk_row else None
+
+        if fk_name:
+            cursor.execute(f"ALTER TABLE `fee_installments` DROP FOREIGN KEY `{fk_name}`;")
 
         for table in ('fee_configurations', 'fee_installments'):
             cursor.execute(
@@ -35,6 +56,13 @@ def fix_collation(apps, schema_editor):
                     f"ALTER TABLE `{table}` CONVERT TO CHARACTER SET utf8mb4 "
                     f"COLLATE {target_collation};"
                 )
+
+        if fk_name:
+            cursor.execute(
+                f"ALTER TABLE `fee_installments` ADD CONSTRAINT `{fk_name}` "
+                "FOREIGN KEY (`fee_configuration_id`) REFERENCES `fee_configurations` (`id`) "
+                "ON DELETE CASCADE;"
+            )
 
 
 def noop_reverse(apps, schema_editor):
