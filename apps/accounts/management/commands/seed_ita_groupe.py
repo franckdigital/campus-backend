@@ -221,6 +221,13 @@ class Command(BaseCommand):
             students_l2_ay1, parents_l2 = self._create_cohort(site, code, levels[1], 'A24', max(NEW_L1_PER_SITE[code] - 2, 3), 2024)
             students_l3_ay1, parents_l3 = self._create_cohort(site, code, levels[2], 'A23', max(NEW_L1_PER_SITE[code] - 3, 3), 2023)
 
+            # L'annee "courante" pilote le signal d'auto-facturation
+            # (ensure_student_invoices resout toujours le bareme de
+            # l'AcademicYear.is_current=True) : on la bascule sur AY1 le
+            # temps de cette section pour que les factures auto-creees a
+            # l'inscription tombent sur le bon bareme/la bonne annee.
+            self._set_current_year(ay1)
+
             self._enroll(students_l1_ay1, classes_ay1[0], ay1)
             self._enroll(students_l2_ay1, classes_ay1[1], ay1)
             self._enroll(students_l3_ay1, classes_ay1[2], ay1)
@@ -250,6 +257,8 @@ class Command(BaseCommand):
             students_l2_ay2 = students_l1_ay1  # promotion L1 -> L2
             students_l3_ay2 = students_l2_ay1  # promotion L2 -> L3
             students_l1_ay2, parents_l1b = self._create_cohort(site, code, levels[0], 'A26', NEW_L1_PER_SITE[code], 2026)
+
+            self._set_current_year(ay2)
 
             self._enroll(students_l1_ay2, classes_ay2[0], ay2)
             self._enroll(students_l2_ay2, classes_ay2[1], ay2)
@@ -327,15 +336,18 @@ class Command(BaseCommand):
         from apps.finance.models import FeeType, PaymentMethod
         from apps.grades.models import GradeCategory
 
+        # is_current sera bascule pendant le seed (voir _set_current_year) pour que
+        # le signal d'auto-facturation resolve le bon bareme par annee ; la valeur
+        # posee ici ne sert que de defaut initial avant le premier site traite.
         ay1, _ = AcademicYear.objects.get_or_create(
             code='AY-2025-2026',
             defaults=dict(name='2025-2026', start_date=date(2025, 9, 1), end_date=date(2026, 6, 30),
-                          is_current=True, registration_open=True),
+                          is_current=False, registration_open=False),
         )
         ay2, _ = AcademicYear.objects.get_or_create(
             code='AY-2026-2027',
             defaults=dict(name='2026-2027', start_date=date(2026, 9, 1), end_date=date(2027, 6, 30),
-                          is_current=False, registration_open=True),
+                          is_current=True, registration_open=True),
         )
 
         sems = {}
@@ -479,6 +491,16 @@ class Command(BaseCommand):
             teachers.append(prof)
         print(f'  Enseignants: {len(teachers)}')
         return teachers
+
+    def _set_current_year(self, ay):
+        """Bascule quelle AcademicYear est is_current=True. Le signal
+        finance.on_enrollment_save (ensure_student_invoices) resout
+        TOUJOURS le bareme via AcademicYear.get_current() quelle que soit
+        l'annee de l'Enrollment cree — sans ce bascule, les factures
+        auto-creees pour l'annee 2 tomberaient sur le bareme de l'annee 1."""
+        from apps.core.models import AcademicYear
+        AcademicYear.objects.exclude(pk=ay.pk).update(is_current=False)
+        AcademicYear.objects.filter(pk=ay.pk).update(is_current=True)
 
     # =========================================================================
     # BAREME / ECHEANCIER
@@ -637,29 +659,38 @@ class Command(BaseCommand):
     # =========================================================================
 
     def _create_finance(self, site, students, staff, ay, fee_config, pay_methods, fee_type_scol, code, level_code):
-        from apps.finance.models import Invoice, InvoiceItem, Payment, sync_enrollment_status
+        """N'invente jamais de Invoice/InvoiceItem a la main : l'Enrollment
+        cree juste avant (voir _enroll) a deja declenche le signal
+        finance.on_enrollment_save -> ensure_student_invoices, qui a
+        auto-cree LA facture SCOLARITE de l'etudiant au bon montant (bareme
+        resolu). Creer une 2e facture manuellement ici doublerait le total
+        affiche (vu en prod : "1 300 000" au lieu de "650 000"). On se
+        contente donc de retrouver cette facture auto-creee et d'y attacher
+        les paiements — Payment.save() (signal on_payment_save) resynchronise
+        alors amount_paid/balance/status de la facture et is_enrolled de
+        l'etudiant tout seul."""
+        from apps.finance.models import Invoice, Payment, ensure_student_invoices, sync_enrollment_status
         receiver = staff[1] if len(staff) > 1 else staff[0]
         pfx = code.replace('-', '')[:4].upper()
         cfg = fee_config[ay.code]
         amount = cfg.amount
         year_start = ay.start_date.year
+        n_invoiced = 0
 
         for i, student in enumerate(students):
             fully_paid = (i % 3 != 0)
             paid_amount = amount if fully_paid else (amount // 2 if i % 3 == 1 else amount // 5)
 
-            inv = Invoice.objects.create(
-                student=student, site=site, academic_year=ay,
-                invoice_number=f'FAC-{pfx}-{level_code}-{ay.code[-4:]}-{i + 1:03d}',
-                due_date=date(year_start, 10, 10), created_by=receiver,
+            _, invoices = ensure_student_invoices(student, created_by=receiver)
+            inv = (
+                invoices.filter(academic_year=ay).exclude(status='CANCELLED').order_by('-created_at').first()
+                or invoices.exclude(status='CANCELLED').order_by('-created_at').first()
             )
-            InvoiceItem.objects.create(
-                invoice=inv, fee_type=fee_type_scol,
-                description=f'Scolarite {level_code} {ay.name}', quantity=1, unit_price=amount, total=amount,
-            )
-            inv.amount_paid = paid_amount
-            inv.save()
-            Invoice.objects.filter(pk=inv.pk).update(issue_date=date(year_start, 9, 5))
+            if not inv:
+                continue  # pas de bareme resolu pour ce site/niveau/annee — rien a facturer
+            n_invoiced += 1
+
+            Invoice.objects.filter(pk=inv.pk).update(issue_date=date(year_start, 9, 5), due_date=date(year_start, 10, 10))
 
             if paid_amount > 0:
                 method = pay_methods['CASH'] if i % 2 == 0 else pay_methods['MOBILE']
@@ -670,14 +701,22 @@ class Command(BaseCommand):
                     received_by=receiver, validated_by=receiver, validated_at=_dt(date(year_start, 9, 20)),
                 )
                 Payment.objects.filter(pk=p.pk).update(payment_date=_dt(date(year_start, 9, 20)))
+                # Le signal on_payment_save vient de resynchroniser inv.amount_paid/balance/status.
 
-            student.total_paid = paid_amount
-            student.remaining_balance = max(amount - paid_amount, 0)
-            student.save(update_fields=['total_paid', 'remaining_balance'])
+            inv.refresh_from_db()
+            student.tuition_fee = inv.total
+            student.total_paid = inv.amount_paid
+            student.remaining_balance = max(inv.total - inv.amount_paid, 0)
+            student.save(update_fields=['tuition_fee', 'total_paid', 'remaining_balance'])
             sync_enrollment_status(student)
 
-        # Un paiement PENDING de reliquat pour tester la validation admin -> notif push
+        # Un paiement PENDING de reliquat (frais divers, distinct de la
+        # scolarite) pour tester la validation admin -> notif push
         if students and code == 'ITA-MARC' and level_code == 'L1':
+            from apps.finance.models import InvoiceItem, FeeType
+            fee_type_divers, _ = FeeType.objects.get_or_create(
+                code='DIVERS', defaults=dict(name='Frais divers', default_amount=0, is_recurring=False),
+            )
             reliquat = amount // 4
             st = students[0]
             inv_notif = Invoice.objects.create(
@@ -686,8 +725,8 @@ class Command(BaseCommand):
                 amount_paid=0, created_by=receiver,
             )
             InvoiceItem.objects.create(
-                invoice=inv_notif, fee_type=fee_type_scol,
-                description='Reliquat scolarite — test notification push',
+                invoice=inv_notif, fee_type=fee_type_divers,
+                description='Frais divers — test notification push',
                 quantity=1, unit_price=reliquat, total=reliquat,
             )
             Invoice.objects.filter(pk=inv_notif.pk).update(issue_date=date(year_start + 1, 4, 1))
@@ -697,7 +736,7 @@ class Command(BaseCommand):
                 reference=f'REF-{pfx}-{level_code}-{ay.code[-4:]}-TEST', received_by=receiver,
             )
 
-        print(f'  Finance {level_code} {ay.name}: {len(students)} factures/paiements')
+        print(f'  Finance {level_code} {ay.name}: {n_invoiced} factures/paiements')
 
     # =========================================================================
     # NOTES / BULLETINS
