@@ -471,12 +471,12 @@ class Command(BaseCommand):
         print(f'  Salles: {len(rooms)}')
         return rooms
 
-    def _make_user(self, site, email, fn, ln, utype, pwd, is_staff=False, is_super=False):
+    def _make_user(self, site, email, fn, ln, utype, pwd, is_staff=False, is_super=False, phone=''):
         from apps.accounts.models import User
         u, created = User.objects.get_or_create(
             email=email,
             defaults=dict(first_name=fn, last_name=ln, user_type=utype, is_active=True,
-                          is_staff=is_staff, is_superuser=is_super, site=site),
+                          is_staff=is_staff, is_superuser=is_super, site=site, phone=phone),
         )
         if created:
             u.set_password(pwd)
@@ -632,7 +632,13 @@ class Command(BaseCommand):
             fully_paid = (i % 3 != 0)  # ~2/3 a jour, 1/3 pas a jour
             tuition = TUITION_BY_LEVEL[level.code]
 
-            su = self._make_user(site, s_email, fn, ln, 'STUDENT', DEMO_PWD)
+            # Numero mobile ivoirien local valide (07XXXXXXXX, 10 chiffres) —
+            # requis par _normalize_ci_phone/CinetPay pour tout paiement mobile
+            # money ; laisse vide, CinetPay rejette l'appel avec un message
+            # trompeur ("doit etre une chaine de caracteres" = en realite vide).
+            phone = '07' + f'{abs(hash(matricule)) % 10**8:08d}'
+
+            su = self._make_user(site, s_email, fn, ln, 'STUDENT', DEMO_PWD, phone=phone)
             student, created = Student.objects.get_or_create(
                 user=su,
                 defaults=dict(
