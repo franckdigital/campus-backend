@@ -249,10 +249,13 @@ class Command(BaseCommand):
             self._create_cst(classes_ay2, s_map, teachers)
 
             # L3 -> diplomes (ne progressent pas), L2 -> L3, L1 -> L2, + nouveaux L1
-            for st in students_l3_ay1:
-                st.status = 'GRADUATED'
-                st.graduation_date = date(2026, 6, 30)
-                st.save(update_fields=['status', 'graduation_date'])
+            # .update() plutot que st.save() : voir le commentaire equivalent dans
+            # _create_finance — un vrai .save() re-declenche ensure_student_invoices
+            # et recree une facture en double sur une facture deja soldee.
+            from apps.students.models import Student as _StudentModel
+            _StudentModel.objects.filter(pk__in=[st.pk for st in students_l3_ay1]).update(
+                status='GRADUATED', graduation_date=date(2026, 6, 30),
+            )
 
             students_l2_ay2 = students_l1_ay1  # promotion L1 -> L2
             students_l3_ay2 = students_l2_ay1  # promotion L2 -> L3
@@ -725,10 +728,18 @@ class Command(BaseCommand):
                 # Le signal on_payment_save vient de resynchroniser inv.amount_paid/balance/status.
 
             inv.refresh_from_db()
-            student.tuition_fee = inv.total
-            student.total_paid = inv.amount_paid
-            student.remaining_balance = max(inv.total - inv.amount_paid, 0)
-            student.save(update_fields=['tuition_fee', 'total_paid', 'remaining_balance'])
+            # .update() plutot que student.save() : un vrai .save() re-declenche
+            # le signal on_student_save -> ensure_student_invoices juste apres que
+            # le paiement ci-dessus vient de faire passer la facture en PAID — une
+            # facture PAID est exclue de la recherche "facture existante" cote
+            # ensure_student_invoices, qui en recreait donc une toute nouvelle a
+            # chaque etudiant (vu en prod : 2-3 factures SCOLARITE par etudiant
+            # au lieu d'une seule). .update() ne declenche aucun signal.
+            from apps.students.models import Student as StudentModel
+            StudentModel.objects.filter(pk=student.pk).update(
+                tuition_fee=inv.total, total_paid=inv.amount_paid,
+                remaining_balance=max(inv.total - inv.amount_paid, 0),
+            )
             sync_enrollment_status(student)
 
         # Un paiement PENDING de reliquat (frais divers, distinct de la
