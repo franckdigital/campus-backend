@@ -682,7 +682,7 @@ class Command(BaseCommand):
             st = students[0]
             inv_notif = Invoice.objects.create(
                 student=st, site=site, academic_year=ay,
-                invoice_number=f'FAC-{pfx}-{level_code}-TEST', due_date=date(year_start + 1, 4, 30),
+                invoice_number=f'FAC-{pfx}-{level_code}-{ay.code[-4:]}-TEST', due_date=date(year_start + 1, 4, 30),
                 amount_paid=0, created_by=receiver,
             )
             InvoiceItem.objects.create(
@@ -692,9 +692,9 @@ class Command(BaseCommand):
             )
             Invoice.objects.filter(pk=inv_notif.pk).update(issue_date=date(year_start + 1, 4, 1))
             Payment.objects.create(
-                payment_number=f'PAY-{pfx}-{level_code}-TEST', invoice=inv_notif,
+                payment_number=f'PAY-{pfx}-{level_code}-{ay.code[-4:]}-TEST', invoice=inv_notif,
                 payment_method=pay_methods['MOBILE'], amount=reliquat, status='PENDING',
-                reference=f'REF-{pfx}-{level_code}-TEST', received_by=receiver,
+                reference=f'REF-{pfx}-{level_code}-{ay.code[-4:]}-TEST', received_by=receiver,
             )
 
         print(f'  Finance {level_code} {ay.name}: {len(students)} factures/paiements')
