@@ -167,7 +167,12 @@ class Command(BaseCommand):
                 self._enroll(students, cls, ay)
                 self._create_finance(site, students, staff, ay, fee_configs[lvl.code], pay_methods, fee_type_scol, prog_code, lvl.code)
                 self._create_grades(students, cls, s_map, teachers[0], sem1, cc, exam_cat)
-                self._create_attendance(sessions, students, teachers[0])
+                # `sessions` (l'emploi du temps) n'a ete cree que pour classes[0]
+                # (L1) — y rattacher les etudiants d'un autre niveau n'aurait pas
+                # de sens pedagogique, et retenter la meme AttendanceSession
+                # (session+date deja insere) violerait sa contrainte d'unicite.
+                if lvl.code == levels[0].code:
+                    self._create_attendance(sessions, students, teachers[0])
                 all_students.extend(students)
 
             self._create_bank_expenses(site, pay_methods, staff[0], prog_code)
