@@ -21,7 +21,7 @@ from django.core.management.base import BaseCommand
 from django.core.management import call_command
 from django.utils import timezone
 
-ADMIN_PWD = 'Admin2026!'
+ADMIN_PWD = 'esc@m2026'
 DEMO_PWD = 'Escam2026!'
 
 RNG = random.Random(7)
